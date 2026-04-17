@@ -21,7 +21,7 @@ export default async function AuthErrorPage({
   }
   const message =
     reason === "missing_code"
-      ? "This sign-in link is incomplete. Request a new magic link from the login page."
+      ? "This confirmation link is incomplete. Open a fresh link from your email, or sign in from the login page with your PIN."
       : decoded
         ? decoded
         : "Something went wrong while signing you in.";

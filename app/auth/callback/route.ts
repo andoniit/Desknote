@@ -3,9 +3,9 @@ import { createRouteHandlerClient } from "@/utils/supabase/route-handler";
 import { DEFAULT_AFTER_LOGIN_PATH, DEFAULT_LOGIN_PATH } from "@/lib/auth/routes";
 
 /**
- * Supabase redirects here after the user clicks the magic link (PKCE `code` flow).
- * Add this exact path in Supabase Dashboard → Authentication → URL configuration
- * → Redirect URLs: https://<your-domain>/auth/callback
+ * Supabase redirects here after email confirmation (PKCE `code` flow) when that flow is enabled.
+ * Add this path under Authentication → URL configuration → Redirect URLs:
+ * https://<your-domain>/auth/callback
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);

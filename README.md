@@ -8,7 +8,7 @@ Ready to deploy on Vercel.
 
 ## Features
 
-- Email magic-link auth via Supabase (`/login` → `/auth/callback`)
+- Email + six-digit PIN auth via Supabase passwords (`/login`; `/auth/callback` if email confirmation is on)
 - Server actions for sending notes and auth
 - Protected routes via Next.js middleware + Supabase SSR cookies
 - Romantic-minimal design system (warm cream, rose, blush, muted plum)
@@ -33,8 +33,8 @@ Ready to deploy on Vercel.
 ```
 .
 ├── app/
-│   ├── login/page.tsx             # Magic link sign-in
-│   ├── auth/callback/route.ts   # OAuth / magic-link code exchange
+│   ├── login/page.tsx             # Email + PIN sign-in
+│   ├── auth/callback/route.ts   # Email confirmation code exchange (optional)
 │   ├── actions/                   # Server actions (auth, notes)
 │   ├── api/device/notes/route.ts  # ESP32-facing REST endpoint
 │   ├── dashboard/page.tsx         # Note feed + composer

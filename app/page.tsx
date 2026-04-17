@@ -48,7 +48,7 @@ export default function HomePage() {
 
         <div className="mt-8 flex flex-col items-center gap-3 md:flex-row">
           <Link href="/login">
-            <Button size="lg">Sign in with magic link</Button>
+            <Button size="lg">Sign in with email &amp; PIN</Button>
           </Link>
         </div>
 

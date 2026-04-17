@@ -1,4 +1,4 @@
-import { MagicLinkForm } from "@/components/auth/MagicLinkForm";
+import { EmailPinForm } from "@/components/auth/EmailPinForm";
 import { LogoMark } from "@/components/ui/LogoMark";
 import { Notice } from "@/components/ui/Notice";
 import { DEFAULT_AFTER_LOGIN_PATH } from "@/lib/auth/routes";
@@ -10,11 +10,11 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{
     next?: string;
-    sent?: string;
+    registered?: string;
     error?: string;
   }>;
 }) {
-  const { next, sent, error } = await searchParams;
+  const { next, registered, error } = await searchParams;
   const safeNext =
     next?.startsWith("/") && !next.startsWith("//")
       ? next
@@ -42,14 +42,15 @@ export default async function LoginPage({
               Welcome back
             </h1>
             <p className="mt-2 text-center text-sm leading-relaxed text-plum-300">
-              Sign in with your email — we&apos;ll send you a magic link.
+              Sign in with your email and the same six-digit PIN you chose (numbers only).
             </p>
 
-            {sent === "1" ? (
+            {registered === "1" ? (
               <Notice tone="success" role="status" className="mt-6 text-center">
-                <strong className="font-medium text-plum-500">Check your inbox</strong>
+                <strong className="font-medium text-plum-500">Almost there</strong>
                 <p className="mt-1 text-sm text-plum-300">
-                  Open the link we sent to finish signing in. You can close this tab.
+                  Check your email and tap the confirmation link. Then come back here and sign in
+                  with your PIN.
                 </p>
               </Notice>
             ) : null}
@@ -61,12 +62,12 @@ export default async function LoginPage({
             ) : null}
 
             <div className="mt-8">
-              <MagicLinkForm defaultNext={safeNext} />
+              <EmailPinForm defaultNext={safeNext} />
             </div>
           </div>
 
           <p className="mt-8 text-center text-xs text-plum-200">
-            By continuing you agree to receive a one-time sign-in email.
+            By continuing you agree to DeskNote&apos;s sign-in terms for your household.
           </p>
         </div>
       </main>
