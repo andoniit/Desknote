@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 253 250 246; /* cream */
+    --foreground: 78 53 61; /* plum-500 */
+    --muted: 229 222 214; /* ash */
+    --accent: 217 138 138; /* rose */
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-cream text-plum-500 font-sans;
+    background-image:
+      radial-gradient(
+        1000px 600px at 0% -10%,
+        rgba(245, 213, 208, 0.45),
+        transparent 60%
+      ),
+      radial-gradient(
+        800px 500px at 100% 0%,
+        rgba(217, 184, 195, 0.35),
+        transparent 60%
+      );
+    min-height: 100dvh;
+  }
+
+  ::selection {
+    @apply bg-rose-100 text-plum-500;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-serif tracking-tight text-plum-500;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white/70 backdrop-blur-xl border border-white/60 rounded-3xl shadow-card;
+  }
+
+  .hairline {
+    @apply border-b border-plum-100/40;
+  }
+
+  .input {
+    @apply w-full rounded-2xl border border-ash-200/80 bg-white/70 px-4 py-3
+      text-plum-500 placeholder:text-plum-200 outline-none transition
+      focus:border-rose-300 focus:ring-4 focus:ring-rose-100/70;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-blush-100/70
+      px-3 py-1 text-xs font-medium text-plum-400;
+  }
+}
+
+@layer utilities {
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+}
