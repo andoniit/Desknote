@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "Desk", icon: HeartIcon },
+  { href: "/relationship", label: "Pair", icon: LinkIcon },
   { href: "/devices", label: "Devices", icon: DeviceIcon },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ] as const;
@@ -63,7 +64,7 @@ export function Navigation() {
       </aside>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-0.5 rounded-full border border-white/60 bg-white/80 p-1.5 shadow-card backdrop-blur-xl md:hidden">
+      <nav className="fixed bottom-[max(1rem,env(safe-area-inset-bottom,0px))] left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-0.5 rounded-full border border-white/60 bg-white/85 p-1.5 shadow-card backdrop-blur-xl md:hidden">
         {links.map(({ href, label, icon: Icon }) => {
           const active = pathname?.startsWith(href);
           return (
@@ -100,6 +101,15 @@ function HeartIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" {...props}>
       <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z" />
+    </svg>
+  );
+}
+
+function LinkIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1" />
+      <path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1" />
     </svg>
   );
 }

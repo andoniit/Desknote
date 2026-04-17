@@ -7,6 +7,7 @@ export const PROTECTED_PATH_PREFIXES = [
   "/dashboard",
   "/devices",
   "/settings",
+  "/relationship",
 ] as const;
 
 /** Paths where a logged-in user is sent away (e.g. to the app) */

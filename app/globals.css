@@ -45,7 +45,8 @@
 
 @layer components {
   .card {
-    @apply bg-white/70 backdrop-blur-xl border border-white/60 rounded-3xl shadow-card;
+    @apply rounded-2xl border border-white/55 bg-white/[0.72] shadow-card backdrop-blur-xl
+      transition-[box-shadow,transform] duration-300 ease-out;
   }
 
   .hairline {

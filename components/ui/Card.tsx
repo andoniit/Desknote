@@ -7,11 +7,7 @@ export function Card({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn(
-        "card p-6 transition-shadow hover:shadow-soft",
-        "animate-fade-in",
-        className
-      )}
+      className={cn("card animate-fade-in p-5 sm:p-6", className)}
       {...props}
     />
   );

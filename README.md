@@ -62,9 +62,10 @@ Ready to deploy on Vercel.
 │       ├── server.ts
 │       ├── middleware.ts
 │       └── route-handler.ts
+├── app/manifest.ts                # PWA manifest (→ /manifest.webmanifest)
 ├── public/
-│   ├── icons/                     # PWA icons (add your own)
-│   └── manifest.json              # PWA manifest
+│   ├── icons/                     # PNG/SVG icons (`npm run generate:icons`)
+│   └── splash/                    # Apple startup images
 ├── types/database.ts              # Typed Supabase schema
 ├── middleware.ts                  # Auth guard for /dashboard, /devices
 ├── next.config.ts

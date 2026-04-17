@@ -14,6 +14,6 @@ export const config = {
     /*
      * Skip static assets and device API (header-based auth, no cookie session).
      */
-    "/((?!_next/static|_next/image|favicon.ico|icons|manifest.json|api/device).*)",
+    "/((?!_next/static|_next/image|favicon.ico|icons|manifest.webmanifest|api/device).*)",
   ],
 };

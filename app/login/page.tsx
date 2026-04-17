@@ -1,5 +1,6 @@
-import Link from "next/link";
 import { MagicLinkForm } from "@/components/auth/MagicLinkForm";
+import { LogoMark } from "@/components/ui/LogoMark";
+import { Notice } from "@/components/ui/Notice";
 import { DEFAULT_AFTER_LOGIN_PATH } from "@/lib/auth/routes";
 
 export const metadata = { title: "Sign in" };
@@ -30,47 +31,33 @@ export default async function LoginPage({
         }}
       />
 
-      <header className="flex shrink-0 justify-center px-5 pt-8 pb-2 md:pt-12">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 rounded-full px-1 py-1 transition-opacity hover:opacity-90"
-        >
-          <span className="h-9 w-9 rounded-full bg-gradient-to-br from-rose-300 to-plum-300 shadow-soft" />
-          <span className="font-serif text-xl tracking-tight text-plum-500">
-            DeskNote
-          </span>
-        </Link>
+      <header className="flex shrink-0 justify-center px-4 pb-2 pt-[max(1.75rem,env(safe-area-inset-top,0px))] sm:px-5 md:pt-12">
+        <LogoMark href="/" size="md" />
       </header>
 
-      <main className="flex flex-1 flex-col items-center px-5 pb-16 pt-4 md:pb-24 md:pt-8">
-        <div className="w-full max-w-[400px]">
-          <div className="card overflow-hidden p-8 shadow-card md:p-10">
-            <h1 className="text-center font-serif text-2xl tracking-tight text-plum-500 md:text-[1.75rem]">
+      <main className="flex flex-1 flex-col items-center px-4 pb-[max(4rem,env(safe-area-inset-bottom,0px))] pt-4 sm:px-5 md:pb-24 md:pt-8">
+        <div className="w-full max-w-[min(100%,24rem)]">
+          <div className="card overflow-hidden p-7 shadow-card sm:p-9 md:p-10">
+            <h1 className="text-center font-serif text-[1.4rem] leading-snug tracking-tight text-plum-500 sm:text-2xl md:text-[1.75rem]">
               Welcome back
             </h1>
-            <p className="mt-2 text-center text-sm text-plum-300">
+            <p className="mt-2 text-center text-sm leading-relaxed text-plum-300">
               Sign in with your email — we&apos;ll send you a magic link.
             </p>
 
             {sent === "1" ? (
-              <div
-                className="mt-6 rounded-2xl border border-rose-100/80 bg-rose-50/80 px-4 py-3 text-center text-sm text-plum-400"
-                role="status"
-              >
+              <Notice tone="success" role="status" className="mt-6 text-center">
                 <strong className="font-medium text-plum-500">Check your inbox</strong>
-                <p className="mt-1 text-plum-300">
+                <p className="mt-1 text-sm text-plum-300">
                   Open the link we sent to finish signing in. You can close this tab.
                 </p>
-              </div>
+              </Notice>
             ) : null}
 
             {error ? (
-              <p
-                className="mt-6 rounded-2xl border border-rose-200/60 bg-white/80 px-4 py-3 text-center text-sm text-rose-400"
-                role="alert"
-              >
+              <Notice tone="danger" role="alert" className="mt-6 text-center">
                 {decodeURIComponent(error)}
-              </p>
+              </Notice>
             ) : null}
 
             <div className="mt-8">

@@ -15,6 +15,8 @@ const fraunces = Fraunces({
   axes: ["opsz"],
 });
 
+const themeBackground = "#FDFAF6";
+
 export const metadata: Metadata = {
   title: {
     default: "DeskNote — little notes for two",
@@ -23,15 +25,36 @@ export const metadata: Metadata = {
   description:
     "A private couple message board. Leave notes on each other's desk, anywhere in the world.",
   applicationName: "DeskNote",
-  manifest: "/manifest.json",
+  formatDetection: {
+    telephone: false,
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
     title: "DeskNote",
+    startupImage: [
+      {
+        url: "/splash/apple-splash-1170x2532.png",
+        media:
+          "(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)",
+      },
+      {
+        url: "/splash/apple-splash-1284x2778.png",
+        media:
+          "(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3)",
+      },
+      {
+        url: "/splash/apple-splash-1170x2532.png",
+        media: "(orientation: portrait)",
+      },
+    ],
   },
   icons: {
-    icon: "/icons/icon-192.png",
-    apple: "/icons/icon-192.png",
+    icon: [
+      { url: "/icons/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
   openGraph: {
     title: "DeskNote",
@@ -42,7 +65,11 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#FDFAF6",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: themeBackground },
+    { media: "(prefers-color-scheme: dark)", color: themeBackground },
+  ],
+  colorScheme: "light",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",

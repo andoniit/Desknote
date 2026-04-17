@@ -1,80 +1,107 @@
-import { AppShell } from "@/components/AppShell";
-import { NoteCard } from "@/components/NoteCard";
-import { NoteComposer } from "@/components/NoteComposer";
+import { DashboardDeskComposer } from "@/components/dashboard/DashboardDeskComposer";
+import { DashboardDeskStatus } from "@/components/dashboard/DashboardDeskStatus";
+import { QuickSendPresets } from "@/components/dashboard/QuickSendPresets";
+import { MessageHistorySection } from "@/components/dashboard/MessageHistorySection";
+import { AppLink } from "@/components/ui/AppLink";
+import { Callout } from "@/components/ui/Callout";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { fetchPairedDevicesForUser } from "@/lib/data/paired-devices";
+import {
+  attachDeviceNames,
+  fetchMessageHistory,
+} from "@/lib/messages/history";
+import { parseMessageHistoryFilter } from "@/lib/messages/history-filters";
+import { resolvePartnerUserId } from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
-import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 
 export const metadata = { title: "Your desk" };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ history?: string }>;
+}) {
   const supabase = createClient(await cookies());
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Middleware already redirects unauthenticated users; this is a safety net.
   if (!user) return null;
 
-  const { data: notes } = await supabase
-    .from("notes")
-    .select("id, body, created_at, status, sender_id, recipient_id")
-    .or(`sender_id.eq.${user.id},recipient_id.eq.${user.id}`)
-    .order("created_at", { ascending: false })
-    .limit(40);
+  const { history: historyParam } = await searchParams;
+  const filter = parseMessageHistoryFilter(historyParam);
 
-  const items =
-    notes?.map((n) => ({
-      id: n.id,
-      body: n.body,
-      created_at: n.created_at,
-      status: n.status,
-      direction:
-        n.sender_id === user.id
-          ? ("outgoing" as const)
-          : ("incoming" as const),
-    })) ?? [];
+  const partnerId = await resolvePartnerUserId(supabase, user.id);
+  const devices = await fetchPairedDevicesForUser(supabase, user.id);
+  const pairedDeviceIds = devices.map((d) => d.id);
+  const myDeskDeviceIds = devices
+    .filter((d) => d.owner_id === user.id)
+    .map((d) => d.id);
+  const nameByDevice = new Map(devices.map((d) => [d.id, d.name]));
+
+  const historyEntries = attachDeviceNames(
+    await fetchMessageHistory(
+      supabase,
+      user.id,
+      pairedDeviceIds,
+      myDeskDeviceIds,
+      filter
+    ),
+    nameByDevice
+  );
 
   return (
-    <AppShell>
-      <header className="mb-8 flex flex-col gap-1">
-        <span className="text-xs uppercase tracking-[0.2em] text-plum-200">
-          Your desk
-        </span>
-        <h1 className="font-serif text-3xl md:text-4xl">
-          {greeting()},{" "}
-          <span className="italic text-rose-300">
-            {user.email?.split("@")[0] ?? "love"}
-          </span>
-        </h1>
-        <p className="text-sm text-plum-300">
-          Leave a little something. It will quietly appear on their desk.
-        </p>
-      </header>
+    <>
+      <PageHeader
+        eyebrow="Your desk"
+        title={
+          <>
+            {greeting()},{" "}
+            <span className="italic text-rose-300">
+              {user.email?.split("@")[0] ?? "love"}
+            </span>
+          </>
+        }
+        description="Messages you save here stay in your history and travel to the desks you pick."
+      />
 
-      <NoteComposer />
+      {!partnerId ? (
+        <Callout className="mb-6 sm:mb-8">
+          <p>
+            To include their desk in “both”, link once on the{" "}
+            <AppLink href="/relationship" variant="inline" className="text-sm">
+              Pair
+            </AppLink>{" "}
+            page — you can still message your own paired displays anytime.
+          </p>
+        </Callout>
+      ) : null}
 
-      <section className="mt-10">
-        <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-plum-300">
-          Recent notes
-        </h2>
+      <div className="space-y-7 sm:space-y-9">
+        <DashboardDeskComposer
+          devices={devices}
+          hasPartner={!!partnerId}
+          viewerUserId={user.id}
+          partnerUserId={partnerId}
+        />
 
-        {items.length === 0 ? (
-          <Card>
-            <CardTitle>No notes yet</CardTitle>
-            <CardDescription>
-              When you send or receive a note, it will appear here — gently.
-            </CardDescription>
-          </Card>
-        ) : (
-          <div className="grid gap-3">
-            {items.map((note) => (
-              <NoteCard key={note.id} note={note} />
-            ))}
-          </div>
-        )}
-      </section>
-    </AppShell>
+        <QuickSendPresets
+          devices={devices}
+          hasPartner={!!partnerId}
+          viewerUserId={user.id}
+          partnerUserId={partnerId}
+        />
+
+        <DashboardDeskStatus
+          devices={devices}
+          viewerUserId={user.id}
+          partnerUserId={partnerId}
+        />
+
+        <MessageHistorySection filter={filter} entries={historyEntries} />
+      </div>
+    </>
   );
 }
 

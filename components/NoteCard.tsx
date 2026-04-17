@@ -8,6 +8,8 @@ type Note = {
   created_at: string;
   status: "queued" | "delivered" | "seen";
   direction: "incoming" | "outgoing";
+  /** When you sent the note, which desk it was aimed at */
+  audienceLabel?: string | null;
 };
 
 export function NoteCard({ note }: { note: Note }) {
@@ -29,9 +31,13 @@ export function NoteCard({ note }: { note: Note }) {
       <p className="font-serif text-xl leading-snug text-plum-500">
         {note.body}
       </p>
-      <div className="flex items-center justify-between text-xs text-plum-300">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-plum-300">
         <span>
-          {note.direction === "outgoing" ? "You wrote" : "They wrote"} ·{" "}
+          {note.direction === "outgoing" ? "You wrote" : "They wrote"}
+          {note.direction === "outgoing" && note.audienceLabel ? (
+            <span className="text-plum-200"> · {note.audienceLabel}</span>
+          ) : null}
+          <span className="text-plum-200"> · </span>
           {formatRelativeTime(note.created_at)}
         </span>
         <span className="chip">{statusLabel}</span>

@@ -2,15 +2,32 @@
 
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
+import { resolvePartnerUserId } from "@/lib/relationship/partner";
 import { createClient } from "@/utils/supabase/server";
 
 const MAX_BODY = 140;
 
+export type DeskNoteTarget = "my_desk" | "partner_desk" | "both";
+
 export async function sendNote({ body }: { body: string }) {
+  return sendNoteToDesks({ body, target: "partner_desk" });
+}
+
+export async function sendNoteToDesks({
+  body,
+  target,
+}: {
+  body: string;
+  target: DeskNoteTarget;
+}) {
   const trimmed = body.trim();
   if (!trimmed) return { error: "Write something first." };
   if (trimmed.length > MAX_BODY) {
     return { error: `Keep it under ${MAX_BODY} characters.` };
+  }
+
+  if (target !== "my_desk" && target !== "partner_desk" && target !== "both") {
+    return { error: "Choose where to send your note." };
   }
 
   const supabase = createClient(await cookies());
@@ -20,26 +37,50 @@ export async function sendNote({ body }: { body: string }) {
 
   if (!user) return { error: "You're not signed in." };
 
-  // Figure out the partner for this user from their profile.
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("partner_id")
-    .eq("id", user.id)
-    .maybeSingle();
+  const partnerId = await resolvePartnerUserId(supabase, user.id);
 
-  if (!profile?.partner_id) {
+  if ((target === "partner_desk" || target === "both") && !partnerId) {
     return {
       error:
-        "Pair with your partner first — open Settings to link your accounts.",
+        "Link with your partner first to send to their desk — open Pair in the menu.",
     };
   }
 
-  const { error } = await supabase.from("notes").insert({
-    sender_id: user.id,
-    recipient_id: profile.partner_id,
-    body: trimmed,
-    status: "queued",
-  });
+  const rows =
+    target === "my_desk"
+      ? [
+          {
+            sender_id: user.id,
+            recipient_id: user.id,
+            body: trimmed,
+            status: "queued" as const,
+          },
+        ]
+      : target === "partner_desk"
+        ? [
+            {
+              sender_id: user.id,
+              recipient_id: partnerId!,
+              body: trimmed,
+              status: "queued" as const,
+            },
+          ]
+        : [
+            {
+              sender_id: user.id,
+              recipient_id: partnerId!,
+              body: trimmed,
+              status: "queued" as const,
+            },
+            {
+              sender_id: user.id,
+              recipient_id: user.id,
+              body: trimmed,
+              status: "queued" as const,
+            },
+          ];
+
+  const { error } = await supabase.from("notes").insert(rows);
 
   if (error) return { error: error.message };
 

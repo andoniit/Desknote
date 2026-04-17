@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
+import { LogoMark } from "@/components/ui/LogoMark";
 
 export default function HomePage() {
   return (
@@ -13,13 +14,8 @@ export default function HomePage() {
         }}
       />
 
-      <header className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-6">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="h-8 w-8 rounded-full bg-gradient-to-br from-rose-300 to-plum-300 shadow-soft" />
-          <span className="font-serif text-xl tracking-tight text-plum-500">
-            DeskNote
-          </span>
-        </Link>
+      <header className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-5 sm:px-6 sm:py-6">
+        <LogoMark href="/" size="sm" />
         <nav className="flex items-center gap-3">
           <Link
             href="/login"
@@ -33,12 +29,12 @@ export default function HomePage() {
         </nav>
       </header>
 
-      <main className="mx-auto flex w-full max-w-6xl flex-col items-center px-6 pt-12 text-center md:pt-20">
+      <main className="mx-auto flex w-full max-w-6xl flex-col items-center px-5 pb-8 pt-10 text-center sm:px-6 md:pt-20">
         <span className="chip mb-6 animate-fade-in">
           For two. Always.
         </span>
 
-        <h1 className="font-serif text-4xl leading-tight tracking-tight text-plum-500 md:text-6xl">
+        <h1 className="font-serif text-[2rem] leading-[1.12] tracking-tight text-plum-500 sm:text-4xl md:text-6xl">
           Little notes,
           <br className="hidden md:block" />{" "}
           <span className="italic text-rose-300">for their desk.</span>

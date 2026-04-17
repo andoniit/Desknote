@@ -1,7 +1,17 @@
 import { AppShell } from "@/components/AppShell";
+import { DeviceSettingsForm } from "@/components/settings/DeviceSettingsForm";
+import { AppLink } from "@/components/ui/AppLink";
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionLabel } from "@/components/ui/SectionLabel";
 import { signOut } from "@/app/actions/auth";
+import { fetchOwnedDevicesForUser } from "@/lib/data/paired-devices";
+import {
+  getRelationshipMemberCount,
+  resolvePartnerUserId,
+} from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
 
@@ -15,30 +25,72 @@ export default async function SettingsPage() {
 
   if (!user) return null;
 
+  const memberCount = await getRelationshipMemberCount(supabase, user.id);
+  const partnerId = await resolvePartnerUserId(supabase, user.id);
+  const linked = memberCount >= 2 && !!partnerId;
+  const waiting = memberCount === 1;
+
+  let partnerHint = "your partner";
+  if (linked && partnerId) {
+    const { data: partnerProfile } = await supabase
+      .from("profiles")
+      .select("display_name")
+      .eq("id", partnerId)
+      .maybeSingle();
+    if (partnerProfile?.display_name) {
+      partnerHint = partnerProfile.display_name;
+    }
+  }
+
+  const ownedDevices = await fetchOwnedDevicesForUser(supabase, user.id);
+
   return (
     <AppShell>
-      <header className="mb-8 flex flex-col gap-1">
-        <span className="text-xs uppercase tracking-[0.2em] text-plum-200">
-          Settings
-        </span>
-        <h1 className="font-serif text-3xl md:text-4xl">
-          Just the <span className="italic text-rose-300">essentials</span>
-        </h1>
-      </header>
+      <PageHeader
+        eyebrow="Settings"
+        title={
+          <>
+            Just the <span className="italic text-rose-300">essentials</span>
+          </>
+        }
+      />
 
-      <div className="grid gap-4">
+      <div className="grid gap-5 sm:gap-6">
         <Card>
           <CardTitle>Account</CardTitle>
           <CardDescription>Signed in as {user.email}</CardDescription>
         </Card>
 
+        <section aria-labelledby="desk-settings-heading" className="space-y-3 sm:space-y-4">
+          <SectionLabel id="desk-settings-heading">Your desks</SectionLabel>
+          {ownedDevices.length === 0 ? (
+            <EmptyState
+              title="No desks on your account yet"
+              description="Pair a display under Devices — then you can name it, set where it lives, and tune how messages behave."
+              action={{ href: "/devices", label: "Open devices" }}
+            />
+          ) : (
+            <div className="grid gap-4 sm:gap-5">
+              {ownedDevices.map((d) => (
+                <DeviceSettingsForm key={d.id} device={d} />
+              ))}
+            </div>
+          )}
+        </section>
+
         <Card>
-          <CardTitle>Pair with your partner</CardTitle>
+          <CardTitle>Your pair</CardTitle>
           <CardDescription>
-            Share your pairing link so only the two of you can exchange notes.
+            {linked
+              ? `You are linked with ${partnerHint}. Notes and devices are shared between your accounts.`
+              : waiting
+                ? "We are still waiting for your partner to enter your invite code. You can create a fresh code from the Pair page."
+                : "Create an invite code or join with your partner’s code to share notes and desk devices."}
           </CardDescription>
-          <div className="mt-4">
-            <Button variant="secondary">Copy pairing link</Button>
+          <div className="mt-5">
+            <AppLink href="/relationship" variant="secondary">
+              {linked ? "Manage pairing" : "Open pairing"}
+            </AppLink>
           </div>
         </Card>
 

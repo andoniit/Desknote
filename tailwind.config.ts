@@ -73,10 +73,15 @@ const config: Config = {
           "0%, 100%": { transform: "translateY(0)" },
           "50%": { transform: "translateY(-6px)" },
         },
+        shimmer: {
+          "0%": { backgroundPosition: "200% 0" },
+          "100%": { backgroundPosition: "-200% 0" },
+        },
       },
       animation: {
-        "fade-in": "fade-in 300ms ease-out",
+        "fade-in": "fade-in 420ms ease-out both",
         float: "float 6s ease-in-out infinite",
+        shimmer: "shimmer 2.2s ease-in-out infinite",
       },
     },
   },
