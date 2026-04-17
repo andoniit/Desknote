@@ -5,7 +5,7 @@ import { DEFAULT_AFTER_LOGIN_PATH, DEFAULT_LOGIN_PATH } from "@/lib/auth/routes"
 /**
  * Supabase redirects here after email confirmation (PKCE `code` flow) when that flow is enabled.
  * Add this path under Authentication → URL configuration → Redirect URLs:
- * https://<your-domain>/auth/callback
+ * https://www.desknote.space/auth/callback (and http://localhost:3000/auth/callback for dev)
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);

@@ -1,10 +1,10 @@
 import { headers } from "next/headers";
 
 /**
- * Absolute site URL for magic-link redirects (Server Actions / Route Handlers).
+ * Absolute site URL for auth redirects (Server Actions / Route Handlers).
  * Vercel sets x-forwarded-proto and x-forwarded-host.
  *
- * Optional fallback: set NEXT_PUBLIC_SITE_URL in production if headers are missing.
+ * Production: set NEXT_PUBLIC_SITE_URL (e.g. https://www.desknote.space) if headers are missing.
  */
 export async function getSiteUrl(): Promise<string> {
   const envUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");

@@ -17,7 +17,12 @@ const fraunces = Fraunces({
 
 const themeBackground = "#FDFAF6";
 
+const defaultSiteUrl = "https://www.desknote.space";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(
+    (process.env.NEXT_PUBLIC_SITE_URL ?? defaultSiteUrl).replace(/\/$/, "")
+  ),
   title: {
     default: "DeskNote — little notes for two",
     template: "%s · DeskNote",

@@ -155,11 +155,14 @@ Ready to deploy on Vercel.
 
 1. Push this repo to GitHub.
 2. Import it in Vercel.
-3. Add the four env vars from `.env.example` in the project's
-   Environment Variables tab.
-4. Deploy.
+3. Add env vars from `.env.example` in the project's Environment Variables tab.
+   Set **`NEXT_PUBLIC_SITE_URL`** to **`https://www.desknote.space`** (or your preview URL for previews).
+4. In **Supabase → Authentication → URL configuration**, set **Site URL** to
+   `https://www.desknote.space` and add **Redirect URLs**:
+   `https://www.desknote.space/auth/callback` plus `http://localhost:3000/auth/callback` for local dev.
+5. Deploy.
 
-No further config is needed — `next.config.ts` is production-ready.
+`next.config.ts` is production-ready; DNS should point your domain at Vercel as usual.
 
 ## ESP32 desk firmware contract
 
