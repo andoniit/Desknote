@@ -20,6 +20,8 @@ create index if not exists messages_to_device_idx on public.messages (to_device_
 
 alter table public.messages enable row level security;
 
+drop policy if exists "messages insert own to allowed devices" on public.messages;
+
 -- Insert: only as yourself, and only to a device you or your linked partner owns.
 create policy "messages insert own to allowed devices"
   on public.messages for insert
@@ -42,6 +44,8 @@ create policy "messages insert own to allowed devices"
         )
     )
   );
+
+drop policy if exists "messages select visible" on public.messages;
 
 -- Read: messages you sent or that arrived on a device you can see (same ownership rules).
 create policy "messages select visible"

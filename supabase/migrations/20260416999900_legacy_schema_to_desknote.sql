@@ -12,24 +12,84 @@
 alter table public.profiles
   add column if not exists partner_id uuid references public.profiles (id);
 
--- Sync partners from legacy "pair of users" relationships (before we rename that table).
-update public.profiles p
-set partner_id = case
-  when p.id = r.user_a_id then r.user_b_id
-  when p.id = r.user_b_id then r.user_a_id
-  else p.partner_id
-end
-from public.relationships r
-where
-  exists (
+-- Sync partners from legacy "pair of users" rows. Column names differ depending on whether
+-- the hub migration (step 5) already renamed the old table to relationships_legacy.
+do $$
+begin
+  if exists (
     select 1
     from information_schema.columns c
     where c.table_schema = 'public'
       and c.table_name = 'relationships'
       and c.column_name = 'user_a_id'
+  ) then
+    if exists (
+      select 1
+      from information_schema.columns c
+      where c.table_schema = 'public'
+        and c.table_name = 'relationships'
+        and c.column_name = 'status'
+    ) then
+      update public.profiles p
+      set partner_id = case
+        when p.id = r.user_a_id then r.user_b_id
+        when p.id = r.user_b_id then r.user_a_id
+        else p.partner_id
+      end
+      from public.relationships r
+      where r.status = 'active'
+        and p.id in (r.user_a_id, r.user_b_id);
+    else
+      update public.profiles p
+      set partner_id = case
+        when p.id = r.user_a_id then r.user_b_id
+        when p.id = r.user_b_id then r.user_a_id
+        else p.partner_id
+      end
+      from public.relationships r
+      where p.id in (r.user_a_id, r.user_b_id);
+    end if;
+  elsif exists (
+    select 1
+    from information_schema.tables t
+    where t.table_schema = 'public'
+      and t.table_name = 'relationships_legacy'
   )
-  and r.status = 'active'
-  and p.id in (r.user_a_id, r.user_b_id);
+  and exists (
+    select 1
+    from information_schema.columns c
+    where c.table_schema = 'public'
+      and c.table_name = 'relationships_legacy'
+      and c.column_name = 'user_a_id'
+  ) then
+    if exists (
+      select 1
+      from information_schema.columns c
+      where c.table_schema = 'public'
+        and c.table_name = 'relationships_legacy'
+        and c.column_name = 'status'
+    ) then
+      update public.profiles p
+      set partner_id = case
+        when p.id = rl.user_a_id then rl.user_b_id
+        when p.id = rl.user_b_id then rl.user_a_id
+        else p.partner_id
+      end
+      from public.relationships_legacy rl
+      where rl.status = 'active'
+        and p.id in (rl.user_a_id, rl.user_b_id);
+    else
+      update public.profiles p
+      set partner_id = case
+        when p.id = rl.user_a_id then rl.user_b_id
+        when p.id = rl.user_b_id then rl.user_a_id
+        else p.partner_id
+      end
+      from public.relationships_legacy rl
+      where p.id in (rl.user_a_id, rl.user_b_id);
+    end if;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- 2) notes + note_status (required by later migrations / app)

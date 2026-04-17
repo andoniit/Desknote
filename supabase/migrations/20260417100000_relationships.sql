@@ -52,6 +52,8 @@ alter table public.relationships enable row level security;
 alter table public.relationship_members enable row level security;
 alter table public.relationship_invites enable row level security;
 
+drop policy if exists "relationships readable by members" on public.relationships;
+
 create policy "relationships readable by members"
   on public.relationships for select
   using (
@@ -61,6 +63,8 @@ create policy "relationships readable by members"
         and m.user_id = auth.uid()
     )
   );
+
+drop policy if exists "relationship_members self read" on public.relationship_members;
 
 create policy "relationship_members self read"
   on public.relationship_members for select
@@ -72,6 +76,8 @@ create policy "relationship_members self read"
         and me.relationship_id = relationship_members.relationship_id
     )
   );
+
+drop policy if exists "relationship_invites readable by inviter" on public.relationship_invites;
 
 create policy "relationship_invites readable by inviter"
   on public.relationship_invites for select
@@ -120,7 +126,9 @@ create or replace function public.desknote_create_invite(invited_email text defa
 returns table (code text, expires_at timestamptz)
 language plpgsql
 security definer
-set search_path = public
+-- gen_random_bytes lives in pgcrypto (Supabase: extensions schema). A narrow search_path
+-- makes the RPC fail with "function gen_random_bytes does not exist" and pairing breaks.
+set search_path = public, extensions
 as $$
 declare
   v_uid uuid := auth.uid();
@@ -130,6 +138,7 @@ declare
   v_normalized text;
   v_expires timestamptz := now() + interval '7 days';
   v_email_norm text;
+  v_attempts int := 0;
 begin
   if v_uid is null then
     raise exception 'not_authenticated';
@@ -169,6 +178,10 @@ begin
     and i.consumed_at is null;
 
   loop
+    v_attempts := v_attempts + 1;
+    if v_attempts > 64 then
+      raise exception 'invite_code_generation_exhausted';
+    end if;
     v_code_raw := encode(gen_random_bytes(5), 'hex');
     v_normalized := public.desknote_normalize_invite_code(v_code_raw);
     begin
@@ -198,7 +211,7 @@ create or replace function public.desknote_join_invite(p_code text)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_uid uuid := auth.uid();

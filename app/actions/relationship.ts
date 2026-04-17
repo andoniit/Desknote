@@ -24,6 +24,15 @@ function mapCreateInviteError(message: string): string {
   if (m.includes("not_authenticated")) {
     return "You need to be signed in to create an invite.";
   }
+  if (m.includes("gen_random_bytes") || m.includes("invite_code_generation_exhausted")) {
+    return "We could not generate a unique invite code. Try again in a moment, or ask your host to confirm the database has pgcrypto (Supabase includes this by default).";
+  }
+  if (m.includes("could not find the function") || m.includes("pgrst202")) {
+    return "Pairing is not set up on this project yet. Apply the Supabase migrations that define desknote_create_invite, then try again.";
+  }
+  if (m.includes("permission denied") || m.includes("42501")) {
+    return "The database blocked this invite. Check that migrations ran and the desknote_create_invite RPC is granted to the authenticated role.";
+  }
   return "We could not create an invite just now. Please try again in a moment.";
 }
 
@@ -60,6 +69,7 @@ export async function createInviteAction(
   });
 
   if (error) {
+    console.error("[createInviteAction] desknote_create_invite failed:", error.message, error);
     return { ok: false, message: mapCreateInviteError(error.message) };
   }
 
@@ -69,6 +79,7 @@ export async function createInviteAction(
   } | null;
 
   if (!row?.code || !row?.expires_at) {
+    console.error("[createInviteAction] RPC returned no code/expiry row:", data);
     return { ok: false, message: mapCreateInviteError("") };
   }
 
