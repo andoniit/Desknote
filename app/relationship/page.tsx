@@ -3,7 +3,9 @@ import { RelationshipSetupForms } from "@/components/relationship/RelationshipSe
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   getRelationshipMemberCount,
+  resolvePartnerDisplayName,
   resolvePartnerUserId,
+  resolveUnpairState,
 } from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
@@ -18,10 +20,22 @@ export default async function RelationshipPage() {
 
   if (!user) return null;
 
-  const memberCount = await getRelationshipMemberCount(supabase, user.id);
   const partnerId = await resolvePartnerUserId(supabase, user.id);
-  const fullyLinked = memberCount >= 2 && !!partnerId;
-  const waitingForPartner = memberCount === 1;
+  // profiles.partner_id is the authoritative "linked" flag — both partners'
+  // rows get set by desknote_join_invite and are always readable under the
+  // "profiles self" policy. relationship_members visibility through RLS is
+  // unreliable for the non-caller row, so don't gate the paired card on it.
+  const fullyLinked = !!partnerId;
+  const memberCount = fullyLinked
+    ? 2
+    : await getRelationshipMemberCount(supabase, user.id);
+  const waitingForPartner = !fullyLinked && memberCount === 1;
+  const partnerLabel = fullyLinked
+    ? await resolvePartnerDisplayName(supabase, partnerId)
+    : null;
+  const unpairState = fullyLinked
+    ? await resolveUnpairState(supabase, user.id)
+    : { kind: "none" as const };
 
   return (
     <AppShell>
@@ -39,6 +53,8 @@ export default async function RelationshipPage() {
         fullyLinked={fullyLinked}
         waitingForPartner={waitingForPartner}
         userEmail={user.email ?? ""}
+        partnerLabel={partnerLabel}
+        unpairState={unpairState.kind}
       />
     </AppShell>
   );

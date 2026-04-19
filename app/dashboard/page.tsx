@@ -11,7 +11,11 @@ import {
   fetchMessageHistory,
 } from "@/lib/messages/history";
 import { parseMessageHistoryFilter } from "@/lib/messages/history-filters";
-import { resolvePartnerUserId } from "@/lib/relationship/partner";
+import { fetchOwnDisplayName } from "@/lib/profile/display-name";
+import {
+  resolvePartnerDisplayName,
+  resolvePartnerUserId,
+} from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
 
@@ -33,6 +37,10 @@ export default async function DashboardPage({
   const filter = parseMessageHistoryFilter(historyParam);
 
   const partnerId = await resolvePartnerUserId(supabase, user.id);
+  const partnerLabel = await resolvePartnerDisplayName(supabase, partnerId);
+  const ownDisplayName = await fetchOwnDisplayName(supabase, user.id);
+  const viewerLabel =
+    ownDisplayName ?? user.email?.split("@")[0] ?? "love";
   const devices = await fetchPairedDevicesForUser(supabase, user.id);
   const pairedDeviceIds = devices.map((d) => d.id);
   const myDeskDeviceIds = devices
@@ -58,9 +66,7 @@ export default async function DashboardPage({
         title={
           <>
             {greeting()},{" "}
-            <span className="italic text-rose-300">
-              {user.email?.split("@")[0] ?? "love"}
-            </span>
+            <span className="italic text-rose-300">{viewerLabel}</span>
           </>
         }
         description="Messages you save here stay in your history and travel to the desks you pick."
@@ -76,7 +82,21 @@ export default async function DashboardPage({
             page — you can still message your own paired displays anytime.
           </p>
         </Callout>
-      ) : null}
+      ) : (
+        <Callout className="mb-6 sm:mb-8">
+          <p>
+            Paired with{" "}
+            <span className="font-medium text-plum-500">
+              {partnerLabel ?? "your partner"}
+            </span>
+            . Notes and devices are shared between your desks —{" "}
+            <AppLink href="/relationship" variant="inline" className="text-sm">
+              manage pairing
+            </AppLink>
+            .
+          </p>
+        </Callout>
+      )}
 
       <div className="space-y-7 sm:space-y-9">
         <DashboardDeskComposer

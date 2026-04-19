@@ -7,6 +7,11 @@ import { createClient } from "@/utils/supabase/server";
 import { getSiteUrl } from "@/lib/auth/site-url";
 import { DEFAULT_LOGIN_PATH } from "@/lib/auth/routes";
 import { normalizePinInput, validateSixDigitPin } from "@/lib/auth/pin";
+import {
+  fetchOwnDisplayName,
+  normalizeDisplayName,
+  upsertOwnDisplayName,
+} from "@/lib/profile/display-name";
 
 function loginUrl(params: Record<string, string>) {
   const q = new URLSearchParams(params);
@@ -20,6 +25,9 @@ function loginUrl(params: Record<string, string>) {
 export async function signInOrSignUpWithEmailPin(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const pin = normalizePinInput(String(formData.get("pin") ?? ""));
+  const displayName = normalizeDisplayName(
+    String(formData.get("display_name") ?? "")
+  );
   const nextRaw = String(formData.get("next") ?? "").trim();
   const next =
     nextRaw.startsWith("/") && !nextRaw.startsWith("//") ? nextRaw : "/dashboard";
@@ -43,6 +51,22 @@ export async function signInOrSignUpWithEmailPin(formData: FormData) {
   });
 
   if (!signInError && signInData.session) {
+    const userId = signInData.user?.id;
+    if (userId) {
+      if (displayName) {
+        await upsertOwnDisplayName(supabase, userId, displayName);
+      } else {
+        const existing = await fetchOwnDisplayName(supabase, userId);
+        if (!existing) {
+          const fromMetadata = normalizeDisplayName(
+            (signInData.user?.user_metadata?.display_name as string | undefined) ?? null
+          );
+          if (fromMetadata) {
+            await upsertOwnDisplayName(supabase, userId, fromMetadata);
+          }
+        }
+      }
+    }
     revalidatePath("/", "layout");
     redirect(next);
   }
@@ -64,7 +88,10 @@ export async function signInOrSignUpWithEmailPin(formData: FormData) {
   const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
     email,
     password: pin,
-    options: { emailRedirectTo },
+    options: {
+      emailRedirectTo,
+      data: displayName ? { display_name: displayName } : undefined,
+    },
   });
 
   if (signUpError) {
@@ -82,6 +109,9 @@ export async function signInOrSignUpWithEmailPin(formData: FormData) {
   }
 
   if (signUpData.session) {
+    if (displayName && signUpData.user?.id) {
+      await upsertOwnDisplayName(supabase, signUpData.user.id, displayName);
+    }
     revalidatePath("/", "layout");
     redirect(next);
   }

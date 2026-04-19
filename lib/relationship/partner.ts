@@ -58,3 +58,58 @@ export async function getRelationshipMemberCount(
   if (error) return 0;
   return count ?? 0;
 }
+
+export type UnpairState =
+  | { kind: "none" }
+  | { kind: "requested_by_me" }
+  | { kind: "requested_by_partner" };
+
+/**
+ * Reads the caller's relationship row (if any) and reports whether an
+ * unpair has been requested and by whom. Returns `{ kind: "none" }` when
+ * the user is not in a relationship or no request is pending.
+ */
+export async function resolveUnpairState(
+  supabase: Client,
+  userId: string
+): Promise<UnpairState> {
+  const { data: mine } = await supabase
+    .from("relationship_members")
+    .select("relationship_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!mine?.relationship_id) return { kind: "none" };
+
+  const { data: rel } = await supabase
+    .from("relationships")
+    .select("unpair_requested_by")
+    .eq("id", mine.relationship_id)
+    .maybeSingle();
+
+  const requester = rel?.unpair_requested_by as string | null | undefined;
+  if (!requester) return { kind: "none" };
+  if (requester === userId) return { kind: "requested_by_me" };
+  return { kind: "requested_by_partner" };
+}
+
+/**
+ * Returns a friendly label for the partner (display name if set, otherwise
+ * `null` so callers can fall back to a generic phrase).
+ * Only `profiles` is queried — auth.users is not readable from the client.
+ */
+export async function resolvePartnerDisplayName(
+  supabase: Client,
+  partnerId: string | null
+): Promise<string | null> {
+  if (!partnerId) return null;
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("display_name")
+    .eq("id", partnerId)
+    .maybeSingle();
+
+  const name = (profile?.display_name as string | null | undefined)?.trim();
+  return name && name.length > 0 ? name : null;
+}

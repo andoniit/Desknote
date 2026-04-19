@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { DeviceSettingsForm } from "@/components/settings/DeviceSettingsForm";
+import { ProfileNameForm } from "@/components/settings/ProfileNameForm";
 import { AppLink } from "@/components/ui/AppLink";
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -8,8 +9,10 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { signOut } from "@/app/actions/auth";
 import { fetchOwnedDevicesForUser } from "@/lib/data/paired-devices";
+import { fetchOwnDisplayName } from "@/lib/profile/display-name";
 import {
   getRelationshipMemberCount,
+  resolvePartnerDisplayName,
   resolvePartnerUserId,
 } from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
@@ -25,23 +28,19 @@ export default async function SettingsPage() {
 
   if (!user) return null;
 
-  const memberCount = await getRelationshipMemberCount(supabase, user.id);
   const partnerId = await resolvePartnerUserId(supabase, user.id);
-  const linked = memberCount >= 2 && !!partnerId;
-  const waiting = memberCount === 1;
+  const linked = !!partnerId;
+  const memberCount = linked
+    ? 2
+    : await getRelationshipMemberCount(supabase, user.id);
+  const waiting = !linked && memberCount === 1;
 
-  let partnerHint = "your partner";
-  if (linked && partnerId) {
-    const { data: partnerProfile } = await supabase
-      .from("profiles")
-      .select("display_name")
-      .eq("id", partnerId)
-      .maybeSingle();
-    if (partnerProfile?.display_name) {
-      partnerHint = partnerProfile.display_name;
-    }
-  }
+  const partnerName = linked
+    ? await resolvePartnerDisplayName(supabase, partnerId)
+    : null;
+  const partnerHint = partnerName ?? "your partner";
 
+  const ownDisplayName = await fetchOwnDisplayName(supabase, user.id);
   const ownedDevices = await fetchOwnedDevicesForUser(supabase, user.id);
 
   return (
@@ -60,6 +59,8 @@ export default async function SettingsPage() {
           <CardTitle>Account</CardTitle>
           <CardDescription>Signed in as {user.email}</CardDescription>
         </Card>
+
+        <ProfileNameForm currentName={ownDisplayName} />
 
         <section aria-labelledby="desk-settings-heading" className="space-y-3 sm:space-y-4">
           <SectionLabel id="desk-settings-heading">Your desks</SectionLabel>

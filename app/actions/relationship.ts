@@ -13,6 +13,10 @@ export type JoinInviteState =
   | { ok: true; message: string }
   | { ok: false; message: string };
 
+export type UnpairToggleState =
+  | { ok: true; state: "requested" | "cancelled" | "dissolved"; message: string }
+  | { ok: false; message: string };
+
 function mapCreateInviteError(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("already_linked")) {
@@ -146,4 +150,62 @@ export async function joinInviteAction(
     ok: true,
     message: "You are linked. Your desks, devices, and notes are now shared between the two of you.",
   };
+}
+
+const unpairErrors: Record<string, string> = {
+  not_signed_in: "Sign in and come back — we could not verify your account.",
+  not_in_pair: "You are not paired right now, so there is nothing to unpair.",
+  pair_incomplete:
+    "Your pair is still waiting for the other person to join. Delete the invite from Share above if you need a reset.",
+};
+
+export async function toggleUnpairAction(
+  _prev: UnpairToggleState | null,
+  _formData: FormData
+): Promise<UnpairToggleState> {
+  const supabase = createClient(await cookies());
+  const { data, error } = await supabase.rpc("desknote_toggle_unpair");
+
+  if (error) {
+    console.error("[toggleUnpairAction] failed:", error.message, error);
+    const m = error.message.toLowerCase();
+    if (m.includes("could not find the function") || m.includes("pgrst202")) {
+      return {
+        ok: false,
+        message:
+          "Unpair is not set up on this project yet. Apply the latest Supabase migrations, then try again.",
+      };
+    }
+    return {
+      ok: false,
+      message: "We could not update the pair right now. Please try again.",
+    };
+  }
+
+  const payload = data as
+    | { ok?: boolean; error?: string; state?: "requested" | "cancelled" | "dissolved" }
+    | null;
+
+  if (!payload?.ok) {
+    const key = payload?.error ?? "unknown";
+    return {
+      ok: false,
+      message: unpairErrors[key] ?? "Something went wrong. Please try again.",
+    };
+  }
+
+  revalidatePath("/relationship");
+  revalidatePath("/settings");
+  revalidatePath("/dashboard");
+  revalidatePath("/devices");
+
+  const state = payload.state ?? "requested";
+  const message =
+    state === "requested"
+      ? "Unpair requested. We will wait for your partner to confirm."
+      : state === "cancelled"
+        ? "We cancelled your unpair request. You are still linked."
+        : "You are unpaired. Notes and devices are no longer shared.";
+
+  return { ok: true, state, message };
 }
