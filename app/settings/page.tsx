@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/AppShell";
+import { RelationshipRealtime } from "@/components/relationship/RelationshipRealtime";
 import { DeviceSettingsForm } from "@/components/settings/DeviceSettingsForm";
 import { ProfileNameForm } from "@/components/settings/ProfileNameForm";
 import { AppLink } from "@/components/ui/AppLink";
@@ -11,9 +12,9 @@ import { signOut } from "@/app/actions/auth";
 import { fetchOwnedDevicesForUser } from "@/lib/data/paired-devices";
 import { fetchOwnDisplayName } from "@/lib/profile/display-name";
 import {
+  formatPartnerLabel,
   getRelationshipMemberCount,
-  resolvePartnerDisplayName,
-  resolvePartnerUserId,
+  resolvePartnerInfo,
 } from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
@@ -28,23 +29,22 @@ export default async function SettingsPage() {
 
   if (!user) return null;
 
-  const partnerId = await resolvePartnerUserId(supabase, user.id);
+  const partnerInfo = await resolvePartnerInfo(supabase, user.id);
+  const { partnerId } = partnerInfo;
   const linked = !!partnerId;
   const memberCount = linked
     ? 2
     : await getRelationshipMemberCount(supabase, user.id);
   const waiting = !linked && memberCount === 1;
-
-  const partnerName = linked
-    ? await resolvePartnerDisplayName(supabase, partnerId)
-    : null;
-  const partnerHint = partnerName ?? "your partner";
+  const partnerHint = linked ? formatPartnerLabel(partnerInfo) : "your partner";
 
   const ownDisplayName = await fetchOwnDisplayName(supabase, user.id);
   const ownedDevices = await fetchOwnedDevicesForUser(supabase, user.id);
 
   return (
     <AppShell>
+      <RelationshipRealtime userId={user.id} partnerId={partnerId} />
+
       <PageHeader
         eyebrow="Settings"
         title={

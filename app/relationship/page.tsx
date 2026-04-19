@@ -1,10 +1,11 @@
 import { AppShell } from "@/components/AppShell";
+import { RelationshipRealtime } from "@/components/relationship/RelationshipRealtime";
 import { RelationshipSetupForms } from "@/components/relationship/RelationshipSetupForms";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
+  formatPartnerLabel,
   getRelationshipMemberCount,
-  resolvePartnerDisplayName,
-  resolvePartnerUserId,
+  resolvePartnerInfo,
   resolveUnpairState,
 } from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
@@ -20,25 +21,25 @@ export default async function RelationshipPage() {
 
   if (!user) return null;
 
-  const partnerId = await resolvePartnerUserId(supabase, user.id);
-  // profiles.partner_id is the authoritative "linked" flag — both partners'
-  // rows get set by desknote_join_invite and are always readable under the
-  // "profiles self" policy. relationship_members visibility through RLS is
-  // unreliable for the non-caller row, so don't gate the paired card on it.
+  const partnerInfo = await resolvePartnerInfo(supabase, user.id);
+  const { partnerId } = partnerInfo;
+  const partnerLabel = formatPartnerLabel(partnerInfo);
+  // desknote_my_partner() is the authoritative "linked" signal — it reads
+  // relationship_members under SECURITY DEFINER and self-heals
+  // profiles.partner_id. If it reports a partner, we're paired, full stop.
   const fullyLinked = !!partnerId;
   const memberCount = fullyLinked
     ? 2
     : await getRelationshipMemberCount(supabase, user.id);
   const waitingForPartner = !fullyLinked && memberCount === 1;
-  const partnerLabel = fullyLinked
-    ? await resolvePartnerDisplayName(supabase, partnerId)
-    : null;
   const unpairState = fullyLinked
     ? await resolveUnpairState(supabase, user.id)
     : { kind: "none" as const };
 
   return (
     <AppShell>
+      <RelationshipRealtime userId={user.id} partnerId={partnerId} />
+
       <PageHeader
         eyebrow="For two"
         title={

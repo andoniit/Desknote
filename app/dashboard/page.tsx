@@ -2,6 +2,7 @@ import { DashboardDeskComposer } from "@/components/dashboard/DashboardDeskCompo
 import { DashboardDeskStatus } from "@/components/dashboard/DashboardDeskStatus";
 import { QuickSendPresets } from "@/components/dashboard/QuickSendPresets";
 import { MessageHistorySection } from "@/components/dashboard/MessageHistorySection";
+import { RelationshipRealtime } from "@/components/relationship/RelationshipRealtime";
 import { AppLink } from "@/components/ui/AppLink";
 import { Callout } from "@/components/ui/Callout";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -13,8 +14,8 @@ import {
 import { parseMessageHistoryFilter } from "@/lib/messages/history-filters";
 import { fetchOwnDisplayName } from "@/lib/profile/display-name";
 import {
-  resolvePartnerDisplayName,
-  resolvePartnerUserId,
+  formatPartnerLabel,
+  resolvePartnerInfo,
 } from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
@@ -36,8 +37,9 @@ export default async function DashboardPage({
   const { history: historyParam } = await searchParams;
   const filter = parseMessageHistoryFilter(historyParam);
 
-  const partnerId = await resolvePartnerUserId(supabase, user.id);
-  const partnerLabel = await resolvePartnerDisplayName(supabase, partnerId);
+  const partnerInfo = await resolvePartnerInfo(supabase, user.id);
+  const { partnerId } = partnerInfo;
+  const partnerLabel = formatPartnerLabel(partnerInfo);
   const ownDisplayName = await fetchOwnDisplayName(supabase, user.id);
   const viewerLabel =
     ownDisplayName ?? user.email?.split("@")[0] ?? "love";
@@ -61,6 +63,8 @@ export default async function DashboardPage({
 
   return (
     <>
+      <RelationshipRealtime userId={user.id} partnerId={partnerId} />
+
       <PageHeader
         eyebrow="Your desk"
         title={
@@ -86,9 +90,7 @@ export default async function DashboardPage({
         <Callout className="mb-6 sm:mb-8">
           <p>
             Paired with{" "}
-            <span className="font-medium text-plum-500">
-              {partnerLabel ?? "your partner"}
-            </span>
+            <span className="font-medium text-plum-500">{partnerLabel}</span>
             . Notes and devices are shared between your desks —{" "}
             <AppLink href="/relationship" variant="inline" className="text-sm">
               manage pairing
