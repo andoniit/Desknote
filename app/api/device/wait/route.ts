@@ -66,7 +66,7 @@ export async function GET(request: Request) {
 
   // Paired — surface a bit of context so the device can render a friendly
   // "Paired as <desk name>" screen instead of a generic banner.
-  const [deskRes, ownerRes] = await Promise.all([
+  const [deskRes, ownerRes, lastNoteRes] = await Promise.all([
     auth.supabase
       .from("devices")
       .select("name, location_name, theme, accent_color")
@@ -76,6 +76,13 @@ export async function GET(request: Request) {
       .from("profiles")
       .select("display_name")
       .eq("id", ownerId)
+      .maybeSingle(),
+    auth.supabase
+      .from("notes")
+      .select("body")
+      .eq("recipient_id", ownerId)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle(),
   ]);
 
@@ -92,6 +99,9 @@ export async function GET(request: Request) {
   // Mirror nested `message` / `desk` / `owner` as top-level keys so `id`,
   // `body`, `name`, `location_name`, `display_name` are findable the same way
   // as on `/api/device/latest`.
+  const lastMessageBody =
+    typeof lastNoteRes.data?.body === "string" ? lastNoteRes.data.body : null;
+
   const withContext = (body: Record<string, unknown>) => {
     const m = body.message as
       | { id?: string; body?: string; created_at?: string; status?: string }
@@ -111,6 +121,7 @@ export async function GET(request: Request) {
     if (owner.display_name != null) flat.display_name = owner.display_name;
     if (desk.theme != null) flat.theme = desk.theme;
     if (desk.accent_color != null) flat.accent_color = desk.accent_color;
+    if (lastMessageBody != null) flat.last_message_body = lastMessageBody;
     return flat;
   };
 

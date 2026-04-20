@@ -38,6 +38,19 @@
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <math.h>
+#include <string.h>
+#include <vector>
+
+// Used by tokenizeNoteBodyItems / drawMessageScreen. Must appear before any function
+// definitions so Arduino's auto-generated prototypes (after #includes) never
+// reference std::vector<NoteBodyItem> before this type exists.
+struct NoteBodyItem {
+  bool    isBreak;
+  bool    isEmoji;
+  String  text;
+  uint8_t spriteUid;
+};
 
 // ---------------------------------------------------------------------------
 // Wi-Fi credentials — replace the two placeholders.
@@ -59,7 +72,7 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://desknote.space";
 const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
-const char* kFirmwareVersion = "hello-0.6";
+const char* kFirmwareVersion = "hello-1.7";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -100,9 +113,9 @@ DeviceCredentials creds;
 WiFiClientSecure tlsClient;
 
 // Result types declared up here (above any function that returns them) so
-// Arduino IDE's auto-generated function prototypes — which get spliced in
-// right below the #includes — don't reference undeclared types. This block
-// MUST stay above the first non-trivial function definition in the file.
+// Arduino IDE's auto-generated function prototypes — inserted before the
+// first function in the sketch — don't reference undeclared types. This block
+// MUST stay above the first function definition in the file.
 struct RegistrationResult {
   bool   ok;
   int    httpStatus;
@@ -125,6 +138,23 @@ struct LatestResult {
   String ownerName;
   String themeId;
   String accentId; // JSON key accent_color
+  // Newest note body for this recipient (any status); for idle hero when queue empty.
+  String lastMessageBody;
+};
+
+// Desk theme + accent from the web app (matches lib/devices/themes + accents).
+// TFT is 16-bit; these are rough approximations of the app's palette.
+// Declared with LatestResult so auto-generated prototypes see ThemePalette.
+String gThemeId  = "cream";
+String gAccentId = "";
+
+struct ThemePalette {
+  uint16_t bg;
+  uint16_t headerBar;
+  uint16_t accent;
+  uint16_t title;
+  uint16_t body;
+  uint16_t subtle;
 };
 
 // First-boot-only: the pairing code we just got back from /register. We
@@ -250,20 +280,6 @@ bool jsonContainsKeyValue(const String& json, const char* key, const char* value
   return json.indexOf(needle) >= 0;
 }
 
-// Desk theme + accent from the web app (matches lib/devices/themes + accents).
-// TFT is 16-bit; these are rough approximations of the app's palette.
-String gThemeId   = "cream";
-String gAccentId  = "";
-
-struct ThemePalette {
-  uint16_t bg;
-  uint16_t headerBar;
-  uint16_t accent;
-  uint16_t title;
-  uint16_t body;
-  uint16_t subtle;
-};
-
 ThemePalette paletteForDesk() {
   ThemePalette p{};
   const String& t = gThemeId.length() ? gThemeId : String("cream");
@@ -313,46 +329,242 @@ ThemePalette paletteForDesk() {
   return p;
 }
 
-// TFT fonts are mostly Latin-1; multi-byte UTF-8 (emoji) won't render. Map
-// common sequences to ASCII so hearts and sparkles still read as intent.
-String printableNoteBody(const String& in) {
-  String out;
-  out.reserve(in.length() + 8);
+// Note bodies: UTF-8 emoji (incl. skin tones / VS16) match kEmoji; Twemoji-based
+// RGB565 sprites in emoji_assets.gen.h render as color on the TFT next to text.
+static void skipUtf8Vs16(const String& in, size_t& i) {
+  if (i + 3 <= in.length()) {
+    const uint8_t* p = (const uint8_t*)(in.c_str() + i);
+    if (p[0] == 0xEF && p[1] == 0xB8 && p[2] == 0x8F) i += 3;
+  }
+}
+
+static void skipSkinToneModifier(const String& in, size_t& i) {
+  if (i + 4 <= in.length()) {
+    const uint8_t* p = (const uint8_t*)(in.c_str() + i);
+    if (p[0] == 0xF0 && p[1] == 0x9F && p[2] == 0x8F && p[3] >= 0xBB && p[3] <= 0xBF) {
+      i += 4;
+    }
+  }
+}
+
+struct EmojiUtf8 {
+  uint8_t        len;
+  uint8_t        b[4];
+  const char*    rep;
+};
+
+// 3- and 4-byte UTF-8 sequences (order: check 4-byte before generic UTF-8).
+static const EmojiUtf8 kEmoji[] = {
+    {3, {0xE2, 0x9D, 0xA4, 0}, "<3"},   // heart (U+2764)
+    {3, {0xE2, 0x9C, 0xA8, 0}, "*"},     // sparkles
+    {3, {0xE2, 0x98, 0xBA, 0}, ":)"},   // U+263A white smiley
+    {3, {0xE2, 0x98, 0xB9, 0}, ":("},   // U+2639
+    {3, {0xE2, 0x9C, 0x85, 0}, "[v]"},  // U+2705 check
+    {3, {0xE2, 0x9D, 0x8C, 0}, "[x]"},  // U+274C cross mark
+    {3, {0xE2, 0xAD, 0x90, 0}, "*"},    // U+2B50 star
+    {3, {0xE2, 0x9D, 0xA3, 0}, "<3"},   // U+2763 heart decoration
+    {3, {0xE2, 0x80, 0x94, 0}, "-"},    // em dash
+    {4, {0xF0, 0x9F, 0x98, 0x80}, ":D"}, // grin
+    {4, {0xF0, 0x9F, 0x98, 0x81}, ":D"},
+    {4, {0xF0, 0x9F, 0x98, 0x82}, "lol"},
+    {4, {0xF0, 0x9F, 0x98, 0x83}, ":D"},
+    {4, {0xF0, 0x9F, 0x98, 0x84}, ":D"},
+    {4, {0xF0, 0x9F, 0x98, 0x85}, ":s"},
+    {4, {0xF0, 0x9F, 0x98, 0x86}, "xD"},
+    {4, {0xF0, 0x9F, 0x98, 0x87}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0x88}, ";)"},
+    {4, {0xF0, 0x9F, 0x98, 0x89}, ";)"},
+    {4, {0xF0, 0x9F, 0x98, 0x8A}, ":)"},
+    {4, {0xF0, 0x9F, 0x98, 0x8B}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0x8C}, ":)"},
+    {4, {0xF0, 0x9F, 0x98, 0x8D}, "<3"},
+    {4, {0xF0, 0x9F, 0x98, 0x8E}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0x8F}, ":|"},
+    {4, {0xF0, 0x9F, 0x98, 0x90}, ":|"},
+    {4, {0xF0, 0x9F, 0x98, 0x91}, ":|"},
+    {4, {0xF0, 0x9F, 0x98, 0x92}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0x93}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0x94}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0x95}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0x96}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0x97}, ":*"},
+    {4, {0xF0, 0x9F, 0x98, 0x98}, ":*"},
+    {4, {0xF0, 0x9F, 0x98, 0x99}, ":*"},
+    {4, {0xF0, 0x9F, 0x98, 0x9A}, ":*"},
+    {4, {0xF0, 0x9F, 0x98, 0x9B}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0x9C}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0x9D}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0x9E}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0x9F}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA0}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA1}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA2}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA3}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA4}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA5}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA6}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA7}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA8}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xA9}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xAA}, "zzz"},
+    {4, {0xF0, 0x9F, 0x98, 0xAB}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xAC}, ":P"},
+    {4, {0xF0, 0x9F, 0x98, 0xAD}, ":'("},
+    {4, {0xF0, 0x9F, 0x98, 0xAE}, ":o"},
+    {4, {0xF0, 0x9F, 0x98, 0xAF}, ":o"},
+    {4, {0xF0, 0x9F, 0x98, 0xB0}, ":o"},
+    {4, {0xF0, 0x9F, 0x98, 0xB1}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xB2}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xB3}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xB4}, "zzz"},
+    {4, {0xF0, 0x9F, 0x98, 0xB5}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xB6}, ":|"},
+    {4, {0xF0, 0x9F, 0x98, 0xB7}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xB8}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xB9}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xBA}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xBB}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xBC}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xBD}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xBE}, ":("},
+    {4, {0xF0, 0x9F, 0x98, 0xBF}, ":("},
+    {4, {0xF0, 0x9F, 0x99, 0x82}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x83}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x84}, "roll"},
+    {4, {0xF0, 0x9F, 0x99, 0x85}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x86}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x87}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x88}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x89}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x8A}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x8B}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x8C}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x8D}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x8E}, ":)"},
+    {4, {0xF0, 0x9F, 0x99, 0x8F}, "pray"},
+    {4, {0xF0, 0x9F, 0x91, 0x8D}, "+1"},
+    {4, {0xF0, 0x9F, 0x91, 0x8E}, "-1"},
+    {4, {0xF0, 0x9F, 0x91, 0x8F}, "clap"},
+    {4, {0xF0, 0x9F, 0x91, 0x8B}, "wave"},
+    {4, {0xF0, 0x9F, 0x91, 0x8C}, "ok"},
+    {4, {0xF0, 0x9F, 0x92, 0x80}, "skull"},
+    {4, {0xF0, 0x9F, 0x92, 0x95}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x96}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x97}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x98}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x99}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x9A}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x9B}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x9C}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x9D}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x9E}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0x9F}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0xA0}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0xA1}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0xA2}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0xA3}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0xA4}, "zzz"},
+    {4, {0xF0, 0x9F, 0x92, 0xA5}, "<3"},
+    {4, {0xF0, 0x9F, 0x92, 0xA8}, "100"},
+    {4, {0xF0, 0x9F, 0x92, 0xA9}, "P"},
+    {4, {0xF0, 0x9F, 0x92, 0xAA}, "muscle"},
+    {4, {0xF0, 0x9F, 0x92, 0xAB}, "balloon"},
+    {4, {0xF0, 0x9F, 0x92, 0xAC}, "mail"},
+    {4, {0xF0, 0x9F, 0x92, 0xAF}, "100"},
+    {4, {0xF0, 0x9F, 0x93, 0xB7}, "cam"},
+    {4, {0xF0, 0x9F, 0x94, 0xA5}, "fire"},
+    {4, {0xF0, 0x9F, 0x94, 0xA4}, "book"},
+    {4, {0xF0, 0x9F, 0x91, 0xBB}, "ghost"},
+    {4, {0xF0, 0x9F, 0x95, 0xBA}, "dance"},
+    {4, {0xF0, 0x9F, 0x8E, 0x89}, "party"},
+    {4, {0xF0, 0x9F, 0x8E, 0x8A}, "party"},
+    {4, {0xF0, 0x9F, 0x8E, 0x81}, "cake"},
+    {4, {0xF0, 0x9F, 0x8D, 0x95}, "pizza"},
+    {4, {0xF0, 0x9F, 0x8D, 0xBA}, "beer"},
+    {4, {0xF0, 0x9F, 0x8D, 0xB5}, "coffee"},
+    {4, {0xF0, 0x9F, 0x8C, 0x99}, "moon"},
+    {4, {0xF0, 0x9F, 0x8C, 0x9E}, "sun"},
+    {4, {0xF0, 0x9F, 0x8C, 0x8E}, "earth"},
+    {4, {0xF0, 0x9F, 0x90, 0xB6}, "dog"},
+    {4, {0xF0, 0x9F, 0x90, 0xB1}, "cat"},
+    {4, {0xF0, 0x9F, 0xA4, 0xA3}, "lol"},
+    {4, {0xF0, 0x9F, 0xA4, 0x94}, "hmm"},
+    {4, {0xF0, 0x9F, 0xA4, 0xAF}, "boom"},
+    {4, {0xF0, 0x9F, 0xA4, 0x8D}, "<3"}, // white heart
+    {4, {0xF0, 0x9F, 0xA4, 0x8E}, "<3"}, // brown heart
+    {4, {0xF0, 0x9F, 0x96, 0xA4}, "<3"}, // black heart
+    {4, {0xF0, 0x9F, 0xAB, 0xB6}, "<3"}, // heart hands
+    {4, {0xF0, 0x9F, 0x91, 0x80}, "eyes"}, // U+1F440 EYES
+    {4, {0xF0, 0x9F, 0x91, 0x81}, "eyes"}, // U+1F441 EYE
+    {4, {0xF0, 0x9F, 0x91, 0x89}, "->"},
+    {4, {0xF0, 0x9F, 0x91, 0x88}, "<-"},
+    {4, {0xF0, 0x9F, 0x99, 0x8C}, "yay"},
+    {3, {0xE2, 0x9C, 0x8C, 0}, "V"},     // victory hand
+    {3, {0xE2, 0x99, 0xA5, 0}, "<3"},    // heart suit
+    {4, {0xF0, 0x9F, 0xA5, 0xB0}, "<3"},
+    {4, {0xF0, 0x9F, 0xA5, 0xB3}, "party"},
+    {4, {0xF0, 0x9F, 0xA5, 0xB2}, "tear"},
+};
+
+#include "emoji_assets.gen.h"
+static_assert(sizeof(kEmoji) / sizeof(kEmoji[0]) == EMOJI_TABLE_ROWS,
+              "kEmoji rows out of sync — run scripts/gen_emoji_assets.py");
+
+// Walk UTF-8 note body: ASCII words, explicit line breaks, Twemoji sprites (see
+// emoji_assets.gen.h). Unknown UTF-8 becomes '*' in the text stream.
+static void tokenizeNoteBodyItems(const String& in, std::vector<NoteBodyItem>& out) {
+  out.clear();
+  String word;
+
+  auto flushWord = [&]() {
+    if (word.length() == 0) return;
+    out.push_back({false, false, word, 0});
+    word = "";
+  };
+  auto flushBreak = [&]() {
+    flushWord();
+    out.push_back({true, false, "", 0});
+  };
+
   for (size_t i = 0; i < in.length();) {
-    const uint8_t b0 = (uint8_t)in[i];
-
-    // U+2764 HEART (E2 9D A4) optional U+FE0F (EF B8 8F)
-    if (i + 2 < in.length() && b0 == 0xE2 && (uint8_t)in[i + 1] == 0x9D &&
-        (uint8_t)in[i + 2] == 0xA4) {
-      out += "<3";
-      i += 3;
-      if (i + 2 < in.length() && (uint8_t)in[i] == 0xEF &&
-          (uint8_t)in[i + 1] == 0xB8 && (uint8_t)in[i + 2] == 0x8F)
+    if (i + 2 < in.length()) {
+      const uint8_t* p = (const uint8_t*)(in.c_str() + i);
+      if (p[0] == 0xE2 && p[1] == 0x80 && p[2] == 0x8D) {
         i += 3;
-      continue;
-    }
-    // U+2728 SPARKLES (E2 9C A8)
-    if (i + 2 < in.length() && b0 == 0xE2 && (uint8_t)in[i + 1] == 0x9C &&
-        (uint8_t)in[i + 2] == 0xA8) {
-      out += " * ";
-      i += 3;
-      continue;
-    }
-    // U+2014 em dash etc. -> ASCII
-    if (i + 2 < in.length() && b0 == 0xE2 && (uint8_t)in[i + 1] == 0x80 &&
-        (uint8_t)in[i + 2] == 0x94) {
-      out += "-";
-      i += 3;
-      continue;
+        continue;
+      }
     }
 
+    const uint8_t b0 = (uint8_t)in[i];
     if (b0 < 0x80) {
-      out += (char)b0;
+      const char c = (char)b0;
+      if (c == '\n') {
+        flushBreak();
+      } else if (c == ' ' || c == '\t') {
+        flushWord();
+      } else {
+        word += c;
+      }
       i += 1;
       continue;
     }
 
-    // Skip well-formed UTF-8 non-ASCII (letters with accents, emoji, etc.)
+    bool matched = false;
+    for (size_t k = 0; k < sizeof(kEmoji) / sizeof(kEmoji[0]); ++k) {
+      const EmojiUtf8& e = kEmoji[k];
+      if (i + e.len > in.length()) continue;
+      if (memcmp(in.c_str() + i, e.b, e.len) == 0) {
+        flushWord();
+        out.push_back({false, true, "", kEmojiRowSpriteIdx[k]});
+        i += e.len;
+        skipUtf8Vs16(in, i);
+        if (e.len == 4) skipSkinToneModifier(in, i);
+        matched = true;
+        break;
+      }
+    }
+    if (matched) continue;
+
     size_t skip = 1;
     if ((b0 & 0xE0) == 0xC0 && i + 1 < in.length())
       skip = 2;
@@ -360,33 +572,101 @@ String printableNoteBody(const String& in) {
       skip = 3;
     else if ((b0 & 0xF8) == 0xF0 && i + 3 < in.length())
       skip = 4;
-    out += '?';
+    word += '*';
     i += skip;
   }
-  return out;
+  flushWord();
 }
 
 // ---------------------------------------------------------------------------
-// Drawing helpers
+// Drawing helpers — GLCD font (1) + integer scale = chunky bitmap / “pixel” UI.
+// Pairing code keeps font 7 (segment digits). See LOAD_GLCD in User_Setup.h.
 // ---------------------------------------------------------------------------
+static constexpr uint8_t kDeskFontScaleXL   = 3;
+static constexpr uint8_t kDeskFontScaleBody = 2;
+static constexpr uint8_t kDeskFontScaleNote = 3;
+
+static inline void deskFontChromeTitle() {
+  tft.setTextFont(1);
+  tft.setTextSize(kDeskFontScaleXL);
+}
+static inline void deskFontChromeMeta() {
+  tft.setTextFont(1);
+  tft.setTextSize(kDeskFontScaleBody);
+}
+static inline void deskFontBody() {
+  tft.setTextFont(1);
+  tft.setTextSize(kDeskFontScaleBody);
+}
+static inline void deskFontNote() {
+  tft.setTextFont(1);
+  tft.setTextSize(kDeskFontScaleNote);
+}
+static inline void deskFontPairingDigits() {
+  tft.setTextFont(7);
+  tft.setTextSize(1);
+}
+
+static int16_t measureNoteItemWidth(const NoteBodyItem& it) {
+  if (it.isEmoji) return (int16_t)(EMOJI_SPRITE_PX + 4);
+  deskFontNote();
+  return tft.textWidth(it.text.c_str());
+}
+
+static void collectWrappedNoteRows(const std::vector<NoteBodyItem>& items,
+                                   int16_t                      xMargin,
+                                   std::vector<std::vector<NoteBodyItem>>& rowsOut) {
+  rowsOut.clear();
+  std::vector<NoteBodyItem> row;
+  deskFontNote();
+  const int16_t spaceW = tft.textWidth(" ");
+  const int16_t innerW = tft.width() - 2 * xMargin;
+
+  for (size_t i = 0; i < items.size(); ++i) {
+    const NoteBodyItem& it = items[i];
+    if (it.isBreak) {
+      if (!row.empty()) {
+        rowsOut.push_back(row);
+        row.clear();
+      }
+      continue;
+    }
+    std::vector<NoteBodyItem> trial = row;
+    trial.push_back(it);
+    int32_t w = 0;
+    for (size_t j = 0; j < trial.size(); ++j) {
+      if (j > 0) w += spaceW;
+      w += measureNoteItemWidth(trial[j]);
+    }
+    if (w <= (int32_t)innerW || row.empty()) {
+      row = trial;
+    } else {
+      if (!row.empty()) rowsOut.push_back(row);
+      row.clear();
+      row.push_back(it);
+    }
+  }
+  if (!row.empty()) rowsOut.push_back(row);
+}
+
 void drawChromeHeader() {
   ThemePalette pal = paletteForDesk();
   tft.fillScreen(pal.bg);
   tft.fillRoundRect(0, 0, tft.width(), 52, 10, pal.headerBar);
 
   tft.setTextColor(pal.title, pal.headerBar);
-  tft.setTextFont(4);
-  tft.setCursor(12, 10);
+  deskFontChromeTitle();
+  tft.setCursor(12, 8);
   tft.print("DeskNote");
 
   tft.setTextColor(pal.subtle, pal.headerBar);
-  tft.setTextFont(2);
+  deskFontChromeMeta();
   tft.setCursor(12, 34);
   tft.print("For two");
 
   // Firmware build — matches kFirmwareVersion; server syncs via X-Firmware-Version.
   const String ver = kFirmwareVersion;
-  tft.setTextFont(2);
+  deskFontChromeMeta();
   const int16_t tw = tft.textWidth(ver.c_str());
   tft.setTextColor(pal.accent, pal.headerBar);
   tft.setCursor(tft.width() - tw - 10, 14);
@@ -399,7 +679,7 @@ void drawStatus(const String& status, uint16_t color = TFT_WHITE) {
   tft.fillRect(0, y - 5, tft.width(), 35, pal.bg);
 
   tft.setTextColor(color, pal.bg);
-  tft.setTextFont(2);
+  deskFontChromeMeta();
   tft.setCursor(10, y);
   tft.print(status);
 }
@@ -415,14 +695,14 @@ void drawPairingCode(const String& code) {
   clearBody();
 
   tft.setTextColor(pal.accent, pal.bg);
-  tft.setTextFont(2);
+  deskFontBody();
   tft.setCursor(10, 70);
   tft.print("Pairing code");
 
   // Font 7 is the built-in 7-segment style font; digits-only. Our pairing
   // codes are 6 decimal digits, which matches.
   tft.setTextColor(pal.title, pal.bg);
-  tft.setTextFont(7);
+  deskFontPairingDigits();
   tft.setCursor(10, 96);
   tft.print(code);
 }
@@ -435,14 +715,14 @@ void drawWaitingForNote(const String& deskName,
   clearBody();
 
   tft.setTextColor(pal.accent, pal.bg);
-  tft.setTextFont(4);
+  deskFontBody();
   tft.setCursor(10, 68);
   tft.print("Paired");
 
   // Line 2: desk name (the one you typed in the pair form). Provides clear
   // visual proof that the correct account claimed this hardware.
   tft.setTextColor(pal.title, pal.bg);
-  tft.setTextFont(4);
+  deskFontBody();
   tft.setCursor(10, 100);
   if (deskName.length()) {
     tft.print(deskName);
@@ -451,7 +731,7 @@ void drawWaitingForNote(const String& deskName,
   }
 
   tft.setTextColor(pal.subtle, pal.bg);
-  tft.setTextFont(2);
+  deskFontChromeMeta();
   tft.setCursor(10, 138);
   String sub;
   if (deskLocation.length()) {
@@ -469,65 +749,121 @@ void drawWaitingForNote(const String& deskName,
   tft.print(sub);
 }
 
-// Render body text wrapped to the screen width using font 4. Font 4 is
-// variable-pitch but averages ~10 px per char, so ~30 chars per line on a
-// 320-px screen works well. Note bodies are bounded at 140 chars by the
-// server, which fits in ~5 lines.
-void drawMessage(const String& body) {
-  drawChromeHeader();
+// Full-screen centered note (pixel GLCD + Twemoji). Footer pinned to bottom when
+// showFooter; main text centered in the area above it. bounceDy nudges the message
+// block vertically (intro bounce).
+void drawMessageScreen(const String& body, const String& deskName, bool showFooter,
+                       int16_t bounceDy) {
   ThemePalette pal = paletteForDesk();
-  clearBody();
+  tft.fillScreen(pal.headerBar);
+  tft.fillRoundRect(6, 6, tft.width() - 12, tft.height() - 12, 14, pal.bg);
 
-  const String printable = printableNoteBody(body);
+  const int16_t xMargin = 12;
+  std::vector<NoteBodyItem> items;
+  tokenizeNoteBodyItems(body, items);
 
-  tft.setTextColor(pal.accent, pal.bg);
-  tft.setTextFont(2);
-  tft.setCursor(10, 64);
-  tft.print("New note");
+  std::vector<std::vector<NoteBodyItem>> rows;
+  collectWrappedNoteRows(items, xMargin, rows);
 
-  tft.setTextColor(pal.body, pal.bg);
-  tft.setTextFont(4);
+  deskFontNote();
+  const int16_t spaceW = tft.textWidth(" ");
+  const uint16_t lhText = (uint16_t)(8 * kDeskFontScaleNote + 8);
+  const uint16_t lhEmoji = (uint16_t)(EMOJI_SPRITE_PX + 6);
+  const uint16_t lineHeight = lhText > lhEmoji ? lhText : lhEmoji;
 
-  const int16_t  xStart      = 10;
-  const int16_t  xMax        = tft.width() - 10;
-  const uint16_t lineHeight  = 28;
-  int16_t        y           = 88;
+  constexpr size_t kMaxNoteRows = 10;
+  while (rows.size() > kMaxNoteRows) rows.pop_back();
 
-  String word;
-  String line;
+  deskFontChromeMeta();
+  const int16_t footerLineH = (int16_t)(8 * kDeskFontScaleBody + 4);
+  const int16_t footerY =
+      showFooter ? (int16_t)(tft.height() - 10 - footerLineH) : (int16_t)(tft.height());
+  const int16_t contentBottom = showFooter ? (int16_t)(footerY - 12) : (int16_t)(tft.height() - 10);
+  const int16_t contentTop    = 14;
+  const int32_t totalMsgH     = (int32_t)rows.size() * (int32_t)lineHeight;
+  const int32_t availH        = (int32_t)contentBottom - (int32_t)contentTop;
+  int16_t       y0 =
+      (int16_t)(contentTop + (availH - totalMsgH) / 2 + (int32_t)bounceDy);
+  if (y0 < 8) y0 = 8;
 
-  auto flushLine = [&]() {
-    if (line.length() == 0) return;
-    tft.setCursor(xStart, y);
-    tft.print(line);
-    y += lineHeight;
-    line = "";
-  };
-
-  auto pushWord = [&](const String& w) {
-    if (w.length() == 0) return;
-    const String probe = line.length() ? line + " " + w : w;
-    if (tft.textWidth(probe) > (xMax - xStart)) {
-      flushLine();
-      line = w;
-    } else {
-      line = probe;
+  for (size_t r = 0; r < rows.size(); ++r) {
+    int32_t rw = 0;
+    for (size_t j = 0; j < rows[r].size(); ++j) {
+      if (j > 0) rw += spaceW;
+      rw += measureNoteItemWidth(rows[r][j]);
     }
-  };
+    int16_t x = (int16_t)((tft.width() - rw) / 2);
+    int16_t y = (int16_t)(y0 + (int32_t)r * (int32_t)lineHeight);
 
-  for (size_t i = 0; i <= printable.length(); ++i) {
-    const char c = i < printable.length() ? printable[i] : '\0';
-    if (c == '\n' || c == '\0' || c == ' ' || c == '\t') {
-      pushWord(word);
-      word = "";
-      if (c == '\n') flushLine();
-      if (c == '\0') break;
-    } else {
-      word += c;
+    tft.setTextColor(pal.body, pal.bg);
+    for (size_t i = 0; i < rows[r].size(); ++i) {
+      const NoteBodyItem& it = rows[r][i];
+      if (it.isEmoji) {
+        const int16_t ey =
+            y + (int16_t)((lineHeight - (uint16_t)EMOJI_SPRITE_PX) / 2);
+        tft.pushImage(x, ey, EMOJI_SPRITE_PX, EMOJI_SPRITE_PX,
+                      const_cast<uint16_t*>(kEmojiSpriteData[it.spriteUid]));
+        x += (int16_t)(EMOJI_SPRITE_PX + 4);
+      } else {
+        deskFontNote();
+        tft.setCursor(x, y);
+        tft.print(it.text);
+        x += tft.textWidth(it.text.c_str());
+      }
+      if (i + 1 < rows[r].size()) x += spaceW;
     }
-    if (y > 200) break;
   }
-  flushLine();
+
+  if (showFooter) {
+    const String rightL = String(kFirmwareVersion) + " F";
+
+    deskFontChromeMeta();
+    int16_t x = xMargin;
+    tft.setTextColor(pal.title, pal.bg);
+    tft.setCursor(x, footerY);
+    tft.print("DeskNote-");
+    tft.setTextColor(pal.subtle, pal.bg);
+    tft.print(deskName.length() ? deskName.c_str() : "Desk");
+
+    tft.setTextColor(pal.subtle, pal.bg);
+    const int16_t rw = tft.textWidth(rightL.c_str());
+    tft.setCursor((int16_t)(tft.width() - xMargin - rw), footerY);
+    tft.print(rightL);
+  }
+}
+
+static size_t utf8AdvancePos(const String& s, size_t i) {
+  if (i >= s.length()) return i;
+  const uint8_t b = (uint8_t)s[i];
+  if (b < 0x80) return i + 1;
+  if ((b & 0xE0) == 0xC0) return (i + 2 <= s.length()) ? i + 2 : s.length();
+  if ((b & 0xF0) == 0xE0) return (i + 3 <= s.length()) ? i + 3 : s.length();
+  if ((b & 0xF8) == 0xF0) return (i + 4 <= s.length()) ? i + 4 : s.length();
+  return i + 1;
+}
+
+static void playTypingAndBounceIntro(const String& full, const String& deskName,
+                                     bool showFooter) {
+  if (full.length() == 0) {
+    drawMessageScreen("", deskName, showFooter, 0);
+    return;
+  }
+  size_t end = 0;
+  while (end < full.length()) {
+    end = utf8AdvancePos(full, end);
+    drawMessageScreen(full.substring(0, end), deskName, showFooter, 0);
+    delay(26);
+    yield();
+  }
+  const uint32_t bounceUntil = millis() + 2200;
+  while (millis() < bounceUntil) {
+    const float t = (float)millis() * 0.004f;
+    const int8_t dy = (int8_t)(3.5f * sinf(t));
+    drawMessageScreen(full, deskName, showFooter, dy);
+    delay(22);
+    yield();
+  }
+  drawMessageScreen(full, deskName, showFooter, 0);
 }
 
 void drawErrorBox(const String& line1, const String& line2) {
@@ -536,7 +872,7 @@ void drawErrorBox(const String& line1, const String& line2) {
   clearBody();
 
   tft.setTextColor(TFT_RED, pal.bg);
-  tft.setTextFont(4);
+  deskFontBody();
   tft.setCursor(10, 70);
   tft.print("Problem");
 
@@ -544,7 +880,7 @@ void drawErrorBox(const String& line1, const String& line2) {
   int16_t y = 108;
   auto drawWrapped = [&](const String& line) {
     tft.setTextColor(pal.body, pal.bg);
-    tft.setTextFont(2);
+    deskFontChromeMeta();
     size_t i = 0;
     while (i < line.length() && y < 205) {
       tft.setCursor(10, y);
@@ -744,6 +1080,7 @@ LatestResult fetchLatest() {
   extractJsonString(payload, "display_name", r.ownerName);
   extractJsonString(payload, "theme", r.themeId);
   extractJsonString(payload, "accent_color", r.accentId);
+  extractJsonString(payload, "last_message_body", r.lastMessageBody);
 
   String body;
   String id;
@@ -800,32 +1137,60 @@ String lastPairedDeskLocation;
 String lastPairedOwnerName;
 String lastRenderedThemeId;
 String lastRenderedAccentId;
+String lastRenderedIdleBody;
+
+// Note screen: cache body for footer timeout redraw (centered layout).
+String       gCachedNoteBody;
+uint32_t     gNoteShownAtMs        = 0;
+bool         gMessageFooterHidden  = false;
+static constexpr uint32_t kMessageFooterVisibleMs = 10UL * 60UL * 1000UL;
 
 void enterWaitingForNote(const String& deskName,
                          const String& deskLocation,
-                         const String& ownerName) {
+                         const String& ownerName,
+                         const String& lastMessageBody) {
   const bool alreadyShowing =
       displayState == DisplayState::WaitingForNote &&
       deskName == lastPairedDeskName &&
       deskLocation == lastPairedDeskLocation &&
       ownerName == lastPairedOwnerName &&
       gThemeId == lastRenderedThemeId &&
-      gAccentId == lastRenderedAccentId;
+      gAccentId == lastRenderedAccentId &&
+      lastMessageBody == lastRenderedIdleBody;
   if (alreadyShowing) return;
-  drawWaitingForNote(deskName, deskLocation, ownerName);
-  drawStatus("Paired and online.", TFT_GREEN);
-  displayState            = DisplayState::WaitingForNote;
-  lastPairedDeskName      = deskName;
-  lastPairedDeskLocation  = deskLocation;
-  lastPairedOwnerName     = ownerName;
-  lastRenderedThemeId     = gThemeId;
-  lastRenderedAccentId    = gAccentId;
+
+  lastPairedDeskName     = deskName;
+  lastPairedDeskLocation = deskLocation;
+  lastPairedOwnerName    = ownerName;
+  lastRenderedThemeId    = gThemeId;
+  lastRenderedAccentId   = gAccentId;
+  lastRenderedIdleBody   = lastMessageBody;
+
+  const bool skipIntroFromNote =
+      displayState == DisplayState::ShowingMessage && lastMessageBody.length() > 0 &&
+      lastMessageBody == gCachedNoteBody;
+
+  if (lastMessageBody.length() > 0) {
+    if (skipIntroFromNote) {
+      drawMessageScreen(lastMessageBody, deskName, true, 0);
+    } else {
+      playTypingAndBounceIntro(lastMessageBody, deskName, true);
+    }
+    gNoteShownAtMs       = millis();
+    gMessageFooterHidden = false;
+  } else {
+    drawWaitingForNote(deskName, deskLocation, ownerName);
+    drawStatus("Paired and online.", TFT_GREEN);
+  }
+  displayState = DisplayState::WaitingForNote;
 }
 
 void enterShowingMessage(const String& body) {
-  drawMessage(body);
-  drawStatus("Note received. Tap phone to send another.", TFT_GREEN);
-  displayState = DisplayState::ShowingMessage;
+  gCachedNoteBody      = body;
+  gMessageFooterHidden = false;
+  playTypingAndBounceIntro(body, lastPairedDeskName, true);
+  gNoteShownAtMs = millis();
+  displayState     = DisplayState::ShowingMessage;
 }
 
 void enterError(const String& line1, const String& line2) {
@@ -944,6 +1309,9 @@ void pollOnce() {
 
   if (latest.themeId.length()) gThemeId = latest.themeId;
   if (latest.accentId.length()) gAccentId = latest.accentId;
+  if (latest.deskName.length()) lastPairedDeskName = latest.deskName;
+  if (latest.deskLocation.length()) lastPairedDeskLocation = latest.deskLocation;
+  if (latest.ownerName.length()) lastPairedOwnerName = latest.ownerName;
 
   if (latest.hasMessage) {
     if (latest.messageId != currentNoteId) {
@@ -956,12 +1324,10 @@ void pollOnce() {
     return;
   }
 
-  // Paired, no queued note. Keep showing the last note if we have one so the
-  // user can still read it; otherwise show the idle "paired" screen with
-  // desk + owner context.
-  if (displayState != DisplayState::ShowingMessage) {
-    enterWaitingForNote(latest.deskName, latest.deskLocation, latest.ownerName);
-  }
+  // Paired, no queued note — idle hero (last_message_body from API) or legacy
+  // "Paired" screen. Also runs after markSeen when leaving ShowingMessage.
+  enterWaitingForNote(latest.deskName, latest.deskLocation, latest.ownerName,
+                      latest.lastMessageBody);
 }
 
 void loop() {
@@ -986,6 +1352,18 @@ void loop() {
   // One long-poll cycle per loop iteration. /api/device/wait blocks up to
   // ~25 s server-side, so this loop is naturally paced without sleeps.
   pollOnce();
+
+  if (!gMessageFooterHidden &&
+      (millis() - gNoteShownAtMs) >= kMessageFooterVisibleMs) {
+    if (displayState == DisplayState::ShowingMessage) {
+      gMessageFooterHidden = true;
+      drawMessageScreen(gCachedNoteBody, lastPairedDeskName, false, 0);
+    } else if (displayState == DisplayState::WaitingForNote &&
+               lastRenderedIdleBody.length() > 0) {
+      gMessageFooterHidden = true;
+      drawMessageScreen(lastRenderedIdleBody, lastPairedDeskName, false, 0);
+    }
+  }
 
   // Short guard delay after a successful cycle; longer back-off after errors
   // so we don't flood the server while it's 4xx/5xx-ing at us.

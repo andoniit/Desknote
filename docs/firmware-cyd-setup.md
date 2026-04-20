@@ -169,8 +169,9 @@ stores SSID/password in NVS (`deskwifi` namespace) and reboots; compile-time
 syncs that string to the web app via the `X-Firmware-Version` header on each
 `/api/device/wait` call, so the Devices card shows the same build. Desk
 **theme** and **accent** from the pair/settings forms are applied as
-background and highlight colours on the TFT (emoji in notes are mapped to
-ASCII-friendly text because built-in fonts are not emoji-capable).
+background and highlight colours on the TFT. **Emoji** in notes cannot render
+as colored glyphs on the CYD; the firmware maps common UTF-8 emoji to short
+ASCII tags (`:)` `+1` `fire` `<3`, etc.) so the message still reads clearly.
 
 Then click **Verify** (✓). The first compile takes a minute because Arduino
 has to build the ESP32 core.
