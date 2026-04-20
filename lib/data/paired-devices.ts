@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
-import { getRelationshipMemberCount } from "@/lib/relationship/partner";
+import { resolvePartnerUserId } from "@/lib/relationship/partner";
 
 type Client = SupabaseClient<Database>;
 
@@ -25,30 +25,19 @@ export async function fetchPairedDevicesForUser(
   supabase: Client,
   userId: string
 ): Promise<PairedDeviceRow[]> {
-  const memberCount = await getRelationshipMemberCount(supabase, userId);
-  const { data: mine } = await supabase
-    .from("relationship_members")
-    .select("relationship_id")
-    .eq("user_id", userId)
-    .maybeSingle();
+  // Use the authoritative partner lookup so legacy pairs (where only
+  // profiles.partner_id was ever set) still see each other's desks. The
+  // previous implementation queried relationship_members directly and
+  // silently returned own-only devices whenever that row was missing.
+  const partnerId = await resolvePartnerUserId(supabase, userId);
+  const ownerIds = partnerId ? [userId, partnerId] : [userId];
 
-  let q = supabase
+  const { data } = await supabase
     .from("devices")
     .select(DEVICE_SELECT)
+    .in("owner_id", ownerIds)
     .order("created_at", { ascending: true });
 
-  if (mine?.relationship_id && memberCount >= 2) {
-    const { data: mates } = await supabase
-      .from("relationship_members")
-      .select("user_id")
-      .eq("relationship_id", mine.relationship_id);
-    const ownerIds = mates?.map((m) => m.user_id) ?? [userId];
-    q = q.in("owner_id", ownerIds);
-  } else {
-    q = q.eq("owner_id", userId);
-  }
-
-  const { data } = await q;
   return (data ?? []).filter(
     (d): d is PairedDeviceRow => !!d?.owner_id && typeof d.id === "string"
   );

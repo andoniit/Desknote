@@ -1,4 +1,5 @@
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
+import { UnpairDeviceButton } from "@/components/devices/UnpairDeviceButton";
 import { themeLabel } from "@/lib/devices/themes";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
@@ -12,7 +13,13 @@ export type DeviceCardModel = {
   last_seen_at: string | null;
 };
 
-export function DeviceCard({ device }: { device: DeviceCardModel }) {
+export function DeviceCard({
+  device,
+  isOwner = false,
+}: {
+  device: DeviceCardModel;
+  isOwner?: boolean;
+}) {
   const online = !!device.online;
 
   return (
@@ -62,6 +69,12 @@ export function DeviceCard({ device }: { device: DeviceCardModel }) {
           </dd>
         </div>
       </dl>
+
+      {isOwner && (
+        <div className="mt-2 border-t border-ash-200/70 pt-3">
+          <UnpairDeviceButton deviceId={device.id} deviceName={device.name} />
+        </div>
+      )}
     </Card>
   );
 }

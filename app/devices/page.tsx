@@ -59,6 +59,7 @@ export default async function DevicesPage() {
             {list.map((d) => (
               <DeviceCard
                 key={d.id}
+                isOwner={d.owner_id === user.id}
                 device={{
                   id: d.id,
                   name: d.name,

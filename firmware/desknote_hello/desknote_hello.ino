@@ -1,46 +1,45 @@
 /*
- * DeskNote — CYD hello + provisioning sketch
+ * DeskNote — CYD hello sketch (register + poll + render)
  * Board: ESP32-2432S028R (Cheap Yellow Display, resistive touch variant)
  *
- * What it does:
- *   1. Initialises the 320x240 ILI9341 screen via TFT_eSPI.
- *   2. Connects to Wi-Fi using the SSID / password you fill in below.
- *   3. POSTs to <SERVER_BASE_URL>/api/device/register with the X-Device-Key
- *      provisioning header. The server returns a 6-digit pairing_code, a
- *      device_id (UUID) and a one-time device_token.
- *   4. Displays the server-issued pairing_code on the TFT. That is the code
- *      you type into the DeskNote web app to claim this desk.
+ * Flow:
+ *   1. Connect to Wi-Fi.
+ *   2. Load device_id + device_token from NVS (ESP32 Preferences).
+ *      If missing, POST /api/device/register with the X-Device-Key header,
+ *      then save the returned credentials to NVS. First boot also keeps the
+ *      pairing_code in RAM so we can display it until the desk is claimed.
+ *   3. Poll GET /api/device/latest?deviceId=<uuid> every POLL_INTERVAL_MS
+ *      with Authorization: Bearer <device_token>. The response is one of:
+ *         - {"message":null,"reason":"unpaired"} — desk not yet claimed.
+ *         - {"message":null}                     — paired, no new note.
+ *         - {"message":{"id":"<uuid>","body":"<text>",...}} — new note.
+ *   4. On a new note, render the body on the TFT, then POST /api/device/seen
+ *      so it clears from the queue.
+ *   5. On HTTP 401 (token invalid / desk deleted in DB), wipe NVS and
+ *      re-register.
  *
  * Required server setup (see also docs/firmware-cyd-setup.md):
- *   - .env.local on the Next.js app must define:
- *       DEVICE_API_KEY=<matches kDeviceApiKey below>
- *       SUPABASE_SERVICE_ROLE_KEY=<Supabase service_role secret>
- *     Restart `next dev` after editing .env.local.
- *   - The ESP32 must be on the same LAN as the dev server, able to reach
+ *   - .env.local on the Next.js app must define DEVICE_API_KEY and
+ *     SUPABASE_SERVICE_ROLE_KEY, then `next dev` must be restarted.
+ *   - The ESP32 must be on the same LAN as the dev server and able to reach
  *     kServerBaseUrl (plain HTTP is fine for local dev).
- *
- * Known hello-sketch limitations (we fix these in the real firmware):
- *   - Every reboot registers a brand new device row. The device_token is
- *     printed to Serial but not persisted in NVS, so it's discarded on reset.
- *   - DEVICE_API_KEY is compiled into the binary. Fine for development; in
- *     production we provision once and store only the per-device bearer token.
+ *   - Apply supabase/migrations/20260420000000_devices_drop_legacy_not_nulls.sql
+ *     so the register INSERT doesn't trip over legacy NOT NULL columns.
  *
  * Arduino IDE prerequisites:
  *   - esp32 by Espressif core 3.0.x+, board "ESP32 Dev Module", 4MB flash.
- *   - Library: TFT_eSPI by Bodmer. User_Setup.h must match this board — a
- *     known-good copy lives next to this sketch; copy it over
- *     ~/Documents/Arduino/libraries/TFT_eSPI/User_Setup.h.
+ *   - Library: TFT_eSPI by Bodmer. User_Setup.h next to this sketch must be
+ *     copied over ~/Documents/Arduino/libraries/TFT_eSPI/User_Setup.h.
  */
 
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 
 // ---------------------------------------------------------------------------
-// Wi-Fi credentials — replace these two placeholders.
-// Do not commit real creds. A proper secrets.h will land with the real
-// firmware; the hello sketch keeps it simple.
+// Wi-Fi credentials — replace the two placeholders.
 // ---------------------------------------------------------------------------
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
@@ -53,28 +52,46 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 // "127.0.0.1" (those resolve to the ESP32 itself).
 //
 // kDeviceApiKey must match DEVICE_API_KEY in the server's .env.local. If they
-// differ the server returns HTTP 401 and the sketch shows "AUTH 401".
+// differ the server returns HTTP 401 from /api/device/register.
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "http://10.0.0.85:3000";
 const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
-const char* kFirmwareVersion = "hello-0.2";
+const char* kFirmwareVersion = "hello-0.3";
 
 // ---------------------------------------------------------------------------
-// Hardware pins that are NOT driven by TFT_eSPI.
-// Backlight sits on GPIO 21 on the common 2432S028R revision. If your
-// board stays dark after flashing, try 27.
+// Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
+// 0 in normal operation so the desk keeps its identity across reboots.
 // ---------------------------------------------------------------------------
-static constexpr uint8_t PIN_BACKLIGHT = 21;
+#define FORCE_REREGISTER 0
 
 // ---------------------------------------------------------------------------
-// Timeouts
+// Timings + hardware
+//
+// WAIT_TIMEOUT_MS must exceed the server's long-poll window (25 s) so the
+// server gets to return {message:null} cleanly before the ESP32 aborts.
+// IDLE_GUARD_MS is a tiny delay between consecutive /wait calls so we don't
+// hammer the server while it's erroring (e.g. 401 after a token wipe).
 // ---------------------------------------------------------------------------
+static constexpr uint8_t  PIN_BACKLIGHT           = 21;
 static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
-static constexpr uint16_t HTTP_TIMEOUT_MS         = 8000;
+static constexpr uint32_t HTTP_TIMEOUT_MS         = 30000;
+static constexpr uint32_t IDLE_GUARD_MS           = 500;
+static constexpr uint32_t ERROR_BACKOFF_MS        = 5000;
 
 // ---------------------------------------------------------------------------
-TFT_eSPI tft = TFT_eSPI();
+TFT_eSPI    tft = TFT_eSPI();
+Preferences prefs;
 
+// Persistent credentials (saved to NVS after /register succeeds).
+struct DeviceCredentials {
+  String deviceId;
+  String deviceToken;
+};
+DeviceCredentials creds;
+
+// Result types declared up here (above any function that returns them) so
+// Arduino IDE's auto-generated function prototypes — which get spliced in
+// right below the #includes — don't reference undeclared types.
 struct RegistrationResult {
   bool   ok;
   int    httpStatus;
@@ -84,10 +101,129 @@ struct RegistrationResult {
   String deviceToken;
 };
 
-RegistrationResult lastRegistration;
+struct LatestResult {
+  bool   ok;
+  int    httpStatus;
+  bool   unpaired;
+  bool   hasMessage;
+  String messageId;
+  String messageBody;
+  // Paired-state context (may be empty strings if the server didn't supply).
+  String deskName;
+  String deskLocation;
+  String ownerName;
+};
+
+// First-boot-only: the pairing code we just got back from /register. We
+// display this while the desk is still unpaired. Lost on reboot by design —
+// once the desk is paired the server returns `unpaired: false` so we don't
+// need it anymore.
+String bootPairingCode;
+
+// Track the note we're currently rendering so we only redraw on change.
+String currentNoteId;
+
+enum class DisplayState {
+  Boot,
+  Unpaired,
+  WaitingForNote,
+  ShowingMessage,
+  Error,
+};
+DisplayState displayState = DisplayState::Boot;
 
 // ---------------------------------------------------------------------------
-// Drawing helpers — simple, deliberate, easy to extend.
+// NVS persistence (namespace "desknote")
+// ---------------------------------------------------------------------------
+void loadCreds() {
+  prefs.begin("desknote", /*readOnly=*/true);
+  creds.deviceId    = prefs.getString("device_id", "");
+  creds.deviceToken = prefs.getString("device_token", "");
+  prefs.end();
+}
+
+void saveCreds(const DeviceCredentials& c) {
+  prefs.begin("desknote", /*readOnly=*/false);
+  prefs.putString("device_id", c.deviceId);
+  prefs.putString("device_token", c.deviceToken);
+  prefs.end();
+}
+
+void wipeCreds() {
+  prefs.begin("desknote", /*readOnly=*/false);
+  prefs.clear();
+  prefs.end();
+  creds = {};
+}
+
+bool hasCreds() {
+  return creds.deviceId.length() > 0 && creds.deviceToken.length() > 0;
+}
+
+// ---------------------------------------------------------------------------
+// JSON helpers — small, dependency-free, handles common string escapes.
+// Adequate for the flat JSON shapes DeskNote returns today.
+// ---------------------------------------------------------------------------
+bool extractJsonString(const String& json, const char* key, String& out) {
+  String needle = "\"";
+  needle += key;
+  needle += "\":";
+
+  int p = json.indexOf(needle);
+  if (p < 0) return false;
+  p += needle.length();
+
+  while (p < (int)json.length() && isspace((unsigned char)json[p])) p++;
+  if (p >= (int)json.length() || json[p] != '"') return false;
+  p++;
+
+  out = "";
+  while (p < (int)json.length()) {
+    char c = json[p];
+    if (c == '"') return true;
+    if (c == '\\' && p + 1 < (int)json.length()) {
+      char esc = json[p + 1];
+      switch (esc) {
+        case '"':  out += '"';  break;
+        case '\\': out += '\\'; break;
+        case '/':  out += '/';  break;
+        case 'n':  out += '\n'; break;
+        case 'r':  out += '\r'; break;
+        case 't':  out += '\t'; break;
+        case 'b':  out += ' ';  break;
+        case 'f':  out += ' ';  break;
+        case 'u':
+          // We don't fully decode \uXXXX; show a placeholder so the rest of
+          // the body still reads. Enough for hello-sketch testing.
+          if (p + 5 < (int)json.length()) {
+            out += '?';
+            p += 4;
+          }
+          break;
+        default:
+          out += esc;
+          break;
+      }
+      p += 2;
+    } else {
+      out += c;
+      p += 1;
+    }
+  }
+  return false;
+}
+
+bool jsonContainsKeyValue(const String& json, const char* key, const char* value) {
+  String needle = "\"";
+  needle += key;
+  needle += "\":\"";
+  needle += value;
+  needle += "\"";
+  return json.indexOf(needle) >= 0;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing helpers
 // ---------------------------------------------------------------------------
 void drawHeader() {
   tft.fillScreen(TFT_BLACK);
@@ -103,60 +239,156 @@ void drawHeader() {
   tft.print("A tiny message board for two.");
 }
 
-void drawPairingCode(const String& code) {
-  tft.fillRect(0, 80, tft.width(), 110, TFT_BLACK);
-
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.setTextFont(2);
-  tft.setCursor(10, 88);
-  tft.print("Pairing code");
-
-  // Font 7 is the built-in 7-segment style font; it only renders digits
-  // 0-9 (plus ':', '-', '.', ' '). Keep pairingCode numeric.
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextFont(7);
-  tft.setCursor(10, 112);
-  tft.print(code);
-}
-
-void drawPairingError(const String& line1, const String& line2) {
-  tft.fillRect(0, 80, tft.width(), 110, TFT_BLACK);
-
-  tft.setTextColor(TFT_RED, TFT_BLACK);
-  tft.setTextFont(4);
-  tft.setCursor(10, 88);
-  tft.print("Provisioning failed");
-
-  // Rough wrap so long Postgres error strings stay readable on the TFT.
-  // TFT_eSPI font 2 is ~6 px wide; 300 px of screen ≈ 50 chars per line.
-  const size_t maxChars = 50;
-  const int16_t xStart  = 10;
-  int16_t y = 130;
-
-  auto drawWrapped = [&](const String& line) {
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextFont(2);
-    size_t i = 0;
-    while (i < line.length() && y < 200) {
-      tft.setCursor(xStart, y);
-      tft.print(line.substring(i, i + maxChars));
-      i += maxChars;
-      y += 18;
-    }
-  };
-
-  drawWrapped(line1);
-  drawWrapped(line2);
-}
-
 void drawStatus(const String& status, uint16_t color = TFT_WHITE) {
-  const int16_t y = 205;
+  const int16_t y = 210;
   tft.fillRect(0, y - 5, tft.width(), 35, TFT_BLACK);
 
   tft.setTextColor(color, TFT_BLACK);
   tft.setTextFont(2);
   tft.setCursor(10, y);
   tft.print(status);
+}
+
+void clearBody() {
+  tft.fillRect(0, 75, tft.width(), 130, TFT_BLACK);
+}
+
+void drawPairingCode(const String& code) {
+  clearBody();
+
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setTextFont(2);
+  tft.setCursor(10, 82);
+  tft.print("Pairing code");
+
+  // Font 7 is the built-in 7-segment style font; digits-only. Our pairing
+  // codes are 6 decimal digits, which matches.
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextFont(7);
+  tft.setCursor(10, 108);
+  tft.print(code);
+}
+
+void drawWaitingForNote(const String& deskName,
+                        const String& deskLocation,
+                        const String& ownerName) {
+  clearBody();
+
+  tft.setTextColor(TFT_SKYBLUE, TFT_BLACK);
+  tft.setTextFont(4);
+  tft.setCursor(10, 88);
+  tft.print("Paired");
+
+  // Line 2: desk name (the one you typed in the pair form). Provides clear
+  // visual proof that the correct account claimed this hardware.
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextFont(4);
+  tft.setCursor(10, 120);
+  if (deskName.length()) {
+    tft.print(deskName);
+  } else {
+    tft.print("This desk");
+  }
+
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setTextFont(2);
+  tft.setCursor(10, 154);
+  String sub;
+  if (deskLocation.length()) {
+    sub += deskLocation;
+  }
+  if (ownerName.length()) {
+    if (sub.length()) sub += "  -  ";
+    sub += "on ";
+    sub += ownerName;
+    sub += "'s account";
+  }
+  if (sub.length() == 0) {
+    sub = "Waiting for notes from your partner...";
+  }
+  tft.print(sub);
+}
+
+// Render body text wrapped to the screen width using font 4. Font 4 is
+// variable-pitch but averages ~10 px per char, so ~30 chars per line on a
+// 320-px screen works well. Note bodies are bounded at 140 chars by the
+// server, which fits in ~5 lines.
+void drawMessage(const String& body) {
+  clearBody();
+
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setTextFont(2);
+  tft.setCursor(10, 80);
+  tft.print("New note");
+
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextFont(4);
+
+  const int16_t  xStart      = 10;
+  const int16_t  xMax        = tft.width() - 10;
+  const uint16_t lineHeight  = 28;
+  int16_t        y           = 100;
+
+  String word;
+  String line;
+
+  auto flushLine = [&]() {
+    if (line.length() == 0) return;
+    tft.setCursor(xStart, y);
+    tft.print(line);
+    y += lineHeight;
+    line = "";
+  };
+
+  auto pushWord = [&](const String& w) {
+    if (w.length() == 0) return;
+    const String probe = line.length() ? line + " " + w : w;
+    if (tft.textWidth(probe) > (xMax - xStart)) {
+      flushLine();
+      line = w;
+    } else {
+      line = probe;
+    }
+  };
+
+  for (size_t i = 0; i <= body.length(); ++i) {
+    const char c = i < body.length() ? body[i] : '\0';
+    if (c == '\n' || c == '\0' || c == ' ' || c == '\t') {
+      pushWord(word);
+      word = "";
+      if (c == '\n') flushLine();
+      if (c == '\0') break;
+    } else {
+      word += c;
+    }
+    if (y > 200) break;
+  }
+  flushLine();
+}
+
+void drawErrorBox(const String& line1, const String& line2) {
+  clearBody();
+
+  tft.setTextColor(TFT_RED, TFT_BLACK);
+  tft.setTextFont(4);
+  tft.setCursor(10, 82);
+  tft.print("Problem");
+
+  const size_t maxChars = 50;
+  int16_t y = 120;
+  auto drawWrapped = [&](const String& line) {
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextFont(2);
+    size_t i = 0;
+    while (i < line.length() && y < 205) {
+      tft.setCursor(10, y);
+      tft.print(line.substring(i, i + maxChars));
+      i += maxChars;
+      y += 18;
+    }
+  };
+  drawWrapped(line1);
+  drawWrapped(line2);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,43 +416,9 @@ bool connectWifi() {
     return false;
   }
 
-  const IPAddress ip = WiFi.localIP();
   Serial.print(F("Wi-Fi OK. IP: "));
-  Serial.println(ip);
-
-  String msg = "Wi-Fi OK  ";
-  msg += ip.toString();
-  drawStatus(msg, TFT_GREEN);
+  Serial.println(WiFi.localIP());
   return true;
-}
-
-// ---------------------------------------------------------------------------
-// JSON helpers
-//
-// The /api/device/register response is a small flat object with three string
-// fields: device_id, pairing_code, device_token. A dependency-free extractor
-// keeps this sketch library-light. It assumes no escaped quotes in values —
-// true for UUIDs, digits, and hex strings.
-// ---------------------------------------------------------------------------
-bool extractJsonString(const String& json, const char* key, String& out) {
-  String needle = "\"";
-  needle += key;
-  needle += "\":\"";
-  const int start = json.indexOf(needle);
-  if (start < 0) return false;
-  const int valueStart = start + needle.length();
-  const int valueEnd   = json.indexOf('"', valueStart);
-  if (valueEnd < 0) return false;
-  out = json.substring(valueStart, valueEnd);
-  return true;
-}
-
-bool extractJsonError(const String& json, String& out) {
-  return extractJsonString(json, "error", out);
-}
-
-bool extractJsonDetail(const String& json, String& out) {
-  return extractJsonString(json, "detail", out);
 }
 
 // ---------------------------------------------------------------------------
@@ -228,11 +426,9 @@ bool extractJsonDetail(const String& json, String& out) {
 // ---------------------------------------------------------------------------
 RegistrationResult registerWithServer() {
   RegistrationResult r{};
-  r.ok = false;
-  r.httpStatus = 0;
 
   if (String(kDeviceApiKey) == "REPLACE_WITH_DEVICE_API_KEY") {
-    r.errorDetail = "DEVICE_API_KEY not set";
+    r.errorDetail = "kDeviceApiKey not set";
     return r;
   }
 
@@ -256,18 +452,18 @@ RegistrationResult registerWithServer() {
   body += kFirmwareVersion;
   body += "\"}";
 
-  const int status = http.POST(body);
-  r.httpStatus = status;
+  const int    status  = http.POST(body);
   const String payload = http.getString();
   http.end();
 
+  r.httpStatus = status;
   Serial.printf("HTTP %d, body: %s\n", status, payload.c_str());
 
   if (status != 200) {
     String err;
     String detail;
-    extractJsonError(payload, err);
-    extractJsonDetail(payload, detail);
+    extractJsonString(payload, "error", err);
+    extractJsonString(payload, "detail", detail);
     if (err.length() && detail.length()) {
       r.errorDetail = err + ": " + detail;
     } else if (err.length()) {
@@ -282,14 +478,168 @@ RegistrationResult registerWithServer() {
 
   if (!extractJsonString(payload, "pairing_code", r.pairingCode) ||
       r.pairingCode.length() != 6) {
-    r.errorDetail = "bad response (pairing_code)";
+    r.errorDetail = "bad response (pairing_code missing)";
     return r;
   }
   extractJsonString(payload, "device_id", r.deviceId);
   extractJsonString(payload, "device_token", r.deviceToken);
+  if (r.deviceId.length() == 0 || r.deviceToken.length() == 0) {
+    r.errorDetail = "bad response (device_id / device_token missing)";
+    return r;
+  }
 
   r.ok = true;
   return r;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/device/wait?deviceId=<id>
+//
+// Long-poll: this call blocks until the server has a note for us or its
+// ~25 s timer fires. Either way we just loop and call again — no client-side
+// polling cadence needed. Response shape matches /api/device/latest.
+// ---------------------------------------------------------------------------
+LatestResult fetchLatest() {
+  LatestResult r{};
+
+  String url = kServerBaseUrl;
+  url += "/api/device/wait?deviceId=";
+  url += creds.deviceId;
+
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setReuse(false);
+  if (!http.begin(url)) {
+    return r;
+  }
+
+  String bearer = "Bearer ";
+  bearer += creds.deviceToken;
+  http.addHeader("Authorization", bearer);
+
+  const int    status  = http.GET();
+  const String payload = http.getString();
+  http.end();
+
+  r.httpStatus = status;
+
+  if (status != 200) {
+    return r;
+  }
+
+  r.ok       = true;
+  r.unpaired = jsonContainsKeyValue(payload, "reason", "unpaired");
+
+  // Paired-state context. These only appear when the server has an owner
+  // for this device. Our flat extractor picks them up correctly as long as
+  // the keys are unique across the payload (they are in today's schema).
+  extractJsonString(payload, "name", r.deskName);
+  extractJsonString(payload, "location_name", r.deskLocation);
+  extractJsonString(payload, "display_name", r.ownerName);
+
+  String body;
+  String id;
+  if (extractJsonString(payload, "body", body) &&
+      extractJsonString(payload, "id", id)) {
+    r.hasMessage  = true;
+    r.messageBody = body;
+    r.messageId   = id;
+  }
+  return r;
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/device/seen
+// ---------------------------------------------------------------------------
+bool markSeen(const String& noteId) {
+  String url = kServerBaseUrl;
+  url += "/api/device/seen";
+
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  if (!http.begin(url)) return false;
+
+  String bearer = "Bearer ";
+  bearer += creds.deviceToken;
+  http.addHeader("Authorization", bearer);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Id", creds.deviceId);
+
+  String body = "{\"note_id\":\"";
+  body += noteId;
+  body += "\"}";
+
+  const int status = http.POST(body);
+  http.end();
+
+  Serial.printf("POST /seen (%s) -> HTTP %d\n", noteId.c_str(), status);
+  return status == 200;
+}
+
+// ---------------------------------------------------------------------------
+// State renderers
+// ---------------------------------------------------------------------------
+void enterUnpaired(const String& code) {
+  if (displayState == DisplayState::Unpaired) return;
+  drawPairingCode(code.length() ? code : String("------"));
+  drawStatus("Type this code into DeskNote.", TFT_GREEN);
+  displayState = DisplayState::Unpaired;
+}
+
+String lastPairedDeskName;
+String lastPairedDeskLocation;
+String lastPairedOwnerName;
+
+void enterWaitingForNote(const String& deskName,
+                         const String& deskLocation,
+                         const String& ownerName) {
+  const bool alreadyShowing =
+      displayState == DisplayState::WaitingForNote &&
+      deskName == lastPairedDeskName &&
+      deskLocation == lastPairedDeskLocation &&
+      ownerName == lastPairedOwnerName;
+  if (alreadyShowing) return;
+  drawWaitingForNote(deskName, deskLocation, ownerName);
+  drawStatus("Paired and online.", TFT_GREEN);
+  displayState            = DisplayState::WaitingForNote;
+  lastPairedDeskName      = deskName;
+  lastPairedDeskLocation  = deskLocation;
+  lastPairedOwnerName     = ownerName;
+}
+
+void enterShowingMessage(const String& body) {
+  drawMessage(body);
+  drawStatus("Note received. Tap phone to send another.", TFT_GREEN);
+  displayState = DisplayState::ShowingMessage;
+}
+
+void enterError(const String& line1, const String& line2) {
+  drawErrorBox(line1, line2);
+  drawStatus("Retrying...", TFT_RED);
+  displayState = DisplayState::Error;
+}
+
+// ---------------------------------------------------------------------------
+bool ensureRegistered() {
+  if (hasCreds()) return true;
+
+  const RegistrationResult reg = registerWithServer();
+  if (!reg.ok) {
+    Serial.printf("Registration failed: %s\n", reg.errorDetail.c_str());
+    enterError("HTTP " + String(reg.httpStatus), reg.errorDetail);
+    return false;
+  }
+
+  creds.deviceId    = reg.deviceId;
+  creds.deviceToken = reg.deviceToken;
+  saveCreds(creds);
+  bootPairingCode = reg.pairingCode;
+
+  Serial.printf("Registered. device_id=%s\n", creds.deviceId.c_str());
+  Serial.printf("device_token (saved to NVS, shown once): %s\n",
+                creds.deviceToken.c_str());
+  Serial.printf("Pairing code: %s\n", bootPairingCode.c_str());
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,62 +648,123 @@ void setup() {
   delay(200);
   Serial.println();
   Serial.println(F("=== DeskNote CYD hello ==="));
-  Serial.printf("Chip model: %s, cores: %d\n",
-                ESP.getChipModel(), ESP.getChipCores());
+  Serial.printf("Chip: %s, cores: %d, firmware: %s\n",
+                ESP.getChipModel(), ESP.getChipCores(), kFirmwareVersion);
 
   pinMode(PIN_BACKLIGHT, OUTPUT);
   digitalWrite(PIN_BACKLIGHT, HIGH);
 
   tft.init();
-  // Rotation 1 = landscape, USB port on the right.
-  // Change to 3 if your USB connector points the other way.
   tft.setRotation(1);
 
   drawHeader();
   drawStatus("Booting...");
 
+#if FORCE_REREGISTER
+  Serial.println(F("FORCE_REREGISTER=1 — wiping saved credentials."));
+  wipeCreds();
+#else
+  loadCreds();
+  if (hasCreds()) {
+    Serial.printf("Loaded creds from NVS. device_id=%s\n", creds.deviceId.c_str());
+  } else {
+    Serial.println(F("No creds in NVS — will register."));
+  }
+#endif
+
   if (!connectWifi()) {
-    drawPairingError("No Wi-Fi — cannot register.",
-                     "Check SSID / password and reboot.");
+    enterError("No Wi-Fi", "Check SSID / password and reboot.");
+    return;
+  }
+  drawStatus("Wi-Fi OK.", TFT_GREEN);
+
+  ensureRegistered();
+}
+
+// ---------------------------------------------------------------------------
+// Poll loop
+// ---------------------------------------------------------------------------
+void pollOnce() {
+  if (!hasCreds()) {
+    ensureRegistered();
     return;
   }
 
-  lastRegistration = registerWithServer();
+  const LatestResult latest = fetchLatest();
 
-  if (!lastRegistration.ok) {
-    Serial.printf("Registration failed: %s\n",
-                  lastRegistration.errorDetail.c_str());
-    String status = "HTTP ";
-    status += String(lastRegistration.httpStatus);
-    drawPairingError(status, lastRegistration.errorDetail);
-    drawStatus("Check server logs + DEVICE_API_KEY.", TFT_RED);
+  if (!latest.ok) {
+    Serial.printf("GET /latest failed (HTTP %d)\n", latest.httpStatus);
+    if (latest.httpStatus == 401) {
+      Serial.println(F("Token rejected — wiping NVS and re-registering."));
+      wipeCreds();
+      ensureRegistered();
+    }
     return;
   }
 
-  Serial.printf("Registered. device_id=%s\n",
-                lastRegistration.deviceId.c_str());
-  Serial.printf("device_token (save this, shown only once): %s\n",
-                lastRegistration.deviceToken.c_str());
-  Serial.printf("Pairing code: %s\n", lastRegistration.pairingCode.c_str());
+  if (latest.unpaired) {
+    // Still showing the pairing_code from this boot's registration. If we
+    // came up from NVS (no bootPairingCode) the desk was paired once and
+    // has been unpaired server-side — clearest fix is to re-register so a
+    // fresh code is issued and displayed.
+    if (bootPairingCode.length() == 0) {
+      Serial.println(F("Server says unpaired but we have no code — re-registering."));
+      wipeCreds();
+      ensureRegistered();
+      return;
+    }
+    enterUnpaired(bootPairingCode);
+    return;
+  }
 
-  drawPairingCode(lastRegistration.pairingCode);
-  drawStatus("Type this code into DeskNote.", TFT_GREEN);
+  // Paired from here on.
+  bootPairingCode = "";
+
+  if (latest.hasMessage) {
+    if (latest.messageId != currentNoteId) {
+      Serial.printf("New note %s: %s\n",
+                    latest.messageId.c_str(), latest.messageBody.c_str());
+      currentNoteId = latest.messageId;
+      enterShowingMessage(latest.messageBody);
+      markSeen(latest.messageId);
+    }
+    return;
+  }
+
+  // Paired, no queued note. Keep showing the last note if we have one so the
+  // user can still read it; otherwise show the idle "paired" screen with
+  // desk + owner context.
+  if (displayState != DisplayState::ShowingMessage) {
+    enterWaitingForNote(latest.deskName, latest.deskLocation, latest.ownerName);
+  }
 }
 
 void loop() {
   static uint32_t lastLog = 0;
-  const uint32_t now = millis();
-  if (now - lastLog > 5000) {
-    lastLog = now;
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("RSSI: %d dBm, heap free: %u bytes\n",
-                    WiFi.RSSI(), (unsigned)ESP.getFreeHeap());
-    } else {
-      Serial.printf("Wi-Fi dropped (status=%d). Retrying...\n",
-                    WiFi.status());
-      connectWifi();
-    }
+  const uint32_t  now     = millis();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("Wi-Fi dropped (status=%d). Retrying...\n", WiFi.status());
+    connectWifi();
+    delay(500);
+    return;
   }
 
-  delay(10);
+  if (now - lastLog > 30000) {
+    lastLog = now;
+    Serial.printf("RSSI: %d dBm, heap free: %u bytes, state: %d\n",
+                  WiFi.RSSI(), (unsigned)ESP.getFreeHeap(), (int)displayState);
+  }
+
+  // One long-poll cycle per loop iteration. /api/device/wait blocks up to
+  // ~25 s server-side, so this loop is naturally paced without sleeps.
+  pollOnce();
+
+  // Short guard delay after a successful cycle; longer back-off after errors
+  // so we don't flood the server while it's 4xx/5xx-ing at us.
+  if (displayState == DisplayState::Error) {
+    delay(ERROR_BACKOFF_MS);
+  } else {
+    delay(IDLE_GUARD_MS);
+  }
 }
