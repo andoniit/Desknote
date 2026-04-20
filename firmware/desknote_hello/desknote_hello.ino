@@ -37,6 +37,7 @@
 #include <Preferences.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 
 // ---------------------------------------------------------------------------
 // Wi-Fi credentials — replace the two placeholders.
@@ -49,14 +50,16 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 //
 // kServerBaseUrl must be reachable from the ESP32 on your Wi-Fi. For local
 // dev that is your Mac's LAN IP + Next.js port — NOT "localhost" and NOT
-// "127.0.0.1" (those resolve to the ESP32 itself).
+// "127.0.0.1" (those resolve to the ESP32 itself). For production, point at
+// your HTTPS deployment ("https://desknote.space").
 //
-// kDeviceApiKey must match DEVICE_API_KEY in the server's .env.local. If they
-// differ the server returns HTTP 401 from /api/device/register.
+// kDeviceApiKey must match DEVICE_API_KEY set in your server environment
+// (.env.local for `next dev`, Vercel project env vars for production). If
+// they differ the server returns HTTP 401 from /api/device/register.
 // ---------------------------------------------------------------------------
-const char* kServerBaseUrl   = "http://10.0.0.85:3000";
+const char* kServerBaseUrl   = "https://desknote.space";
 const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
-const char* kFirmwareVersion = "hello-0.3";
+const char* kFirmwareVersion = "hello-0.5";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -89,9 +92,17 @@ struct DeviceCredentials {
 };
 DeviceCredentials creds;
 
+// One reusable TLS client; setInsecure() skips CA verification, which keeps
+// the firmware tiny (no bundled cert) at the cost of trusting whatever
+// answers on kServerBaseUrl. Auth is end-to-end via the bearer token /
+// X-Device-Key, so a hostile MitM can't impersonate a registered desk
+// without also stealing those secrets - acceptable trade-off for an MVP.
+WiFiClientSecure tlsClient;
+
 // Result types declared up here (above any function that returns them) so
 // Arduino IDE's auto-generated function prototypes — which get spliced in
-// right below the #includes — don't reference undeclared types.
+// right below the #includes — don't reference undeclared types. This block
+// MUST stay above the first non-trivial function definition in the file.
 struct RegistrationResult {
   bool   ok;
   int    httpStatus;
@@ -131,6 +142,21 @@ enum class DisplayState {
   Error,
 };
 DisplayState displayState = DisplayState::Boot;
+
+bool isHttpsUrl(const String& url) {
+  return url.startsWith("https://") || url.startsWith("HTTPS://");
+}
+
+// Wrapper around HTTPClient::begin that picks plain HTTP or TLS depending
+// on the URL scheme. Returns the same bool that http.begin returns so the
+// callers' early-return paths stay identical.
+bool beginHttp(HTTPClient& http, const String& url) {
+  if (isHttpsUrl(url)) {
+    tlsClient.setInsecure();
+    return http.begin(tlsClient, url);
+  }
+  return http.begin(url);
+}
 
 // ---------------------------------------------------------------------------
 // NVS persistence (namespace "desknote")
@@ -440,7 +466,7 @@ RegistrationResult registerWithServer() {
 
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(url)) {
+  if (!beginHttp(http, url)) {
     r.errorDetail = "http.begin failed";
     return r;
   }
@@ -509,7 +535,7 @@ LatestResult fetchLatest() {
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setReuse(false);
-  if (!http.begin(url)) {
+  if (!beginHttp(http, url)) {
     return r;
   }
 
@@ -557,7 +583,7 @@ bool markSeen(const String& noteId) {
 
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(url)) return false;
+  if (!beginHttp(http, url)) return false;
 
   String bearer = "Bearer ";
   bearer += creds.deviceToken;
@@ -693,11 +719,18 @@ void pollOnce() {
   const LatestResult latest = fetchLatest();
 
   if (!latest.ok) {
-    Serial.printf("GET /latest failed (HTTP %d)\n", latest.httpStatus);
+    Serial.printf("GET /wait failed (HTTP %d)\n", latest.httpStatus);
     if (latest.httpStatus == 401) {
       Serial.println(F("Token rejected — wiping NVS and re-registering."));
       wipeCreds();
       ensureRegistered();
+    } else {
+      // Non-401: TLS error, timeout, 5xx, or Vercel cutting long-polls. Surface
+      // it — otherwise the status line stays stuck on "Wi-Fi OK." forever.
+      String detail = latest.httpStatus < 0
+                        ? HTTPClient::errorToString(latest.httpStatus)
+                        : ("HTTP " + String(latest.httpStatus));
+      enterError("Server error", detail);
     }
     return;
   }

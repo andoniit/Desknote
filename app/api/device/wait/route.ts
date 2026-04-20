@@ -22,12 +22,16 @@ import { requireDeviceAuth } from "@/lib/api/device/require-device-auth";
  *     across RLS.
  */
 
-// Max duration hint for Vercel's Node runtime. Local `next dev` has no
-// hard cap; on Vercel hobby this caps at 10 s, so keep WAIT_TIMEOUT_MS
-// comfortably below 30 s for pro and 9 s for hobby.
+// Max duration hint for Vercel's Node runtime. Hobby caps serverless at 10 s;
+// Pro allows up to 60 s (with maxDuration). Default wait stays under 10 s so
+// long-polls complete on Hobby; override with DEVICE_WAIT_TIMEOUT_MS (ms).
 export const maxDuration = 30;
 
-const WAIT_TIMEOUT_MS = 25_000;
+const WAIT_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.DEVICE_WAIT_TIMEOUT_MS);
+  if (Number.isFinite(raw) && raw >= 2000 && raw <= 55_000) return Math.floor(raw);
+  return 8_000;
+})();
 
 type QueuedNote = {
   id: string;
@@ -76,11 +80,29 @@ export async function GET(request: Request) {
   const owner = {
     display_name: (ownerRes.data?.display_name as string | null) ?? null,
   };
-  const withContext = (body: Record<string, unknown>) => ({
-    ...body,
-    desk,
-    owner,
-  });
+  // ESP32 firmware uses a tiny flat JSON string extractor (no nested paths).
+  // Mirror nested `message` / `desk` / `owner` as top-level keys so `id`,
+  // `body`, `name`, `location_name`, `display_name` are findable the same way
+  // as on `/api/device/latest`.
+  const withContext = (body: Record<string, unknown>) => {
+    const m = body.message as
+      | { id?: string; body?: string; created_at?: string; status?: string }
+      | null
+      | undefined;
+    const flat: Record<string, unknown> = {
+      ...body,
+      desk,
+      owner,
+    };
+    if (m && typeof m === "object" && m.id && typeof m.body === "string") {
+      flat.id = m.id;
+      flat.body = m.body;
+    }
+    if (desk.name != null) flat.name = desk.name;
+    if (desk.location_name != null) flat.location_name = desk.location_name;
+    if (owner.display_name != null) flat.display_name = owner.display_name;
+    return flat;
+  };
 
   const fetchQueuedNote = async (): Promise<QueuedNote | null> => {
     const { data, error } = await auth.supabase
