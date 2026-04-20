@@ -38,6 +38,7 @@ type QueuedNote = {
   body: string;
   created_at: string;
   status: "queued" | "delivered" | "seen";
+  message_type?: string | null;
 };
 
 export async function GET(request: Request) {
@@ -102,9 +103,27 @@ export async function GET(request: Request) {
   const lastMessageBody =
     typeof lastNoteRes.data?.body === "string" ? lastNoteRes.data.body : null;
 
+  const attachMessageType = async (note: QueuedNote): Promise<QueuedNote> => {
+    const { data } = await auth.supabase
+      .from("messages")
+      .select("message_type")
+      .eq("note_id", note.id)
+      .maybeSingle();
+    return {
+      ...note,
+      message_type: (data?.message_type as string | null) ?? null,
+    };
+  };
+
   const withContext = (body: Record<string, unknown>) => {
     const m = body.message as
-      | { id?: string; body?: string; created_at?: string; status?: string }
+      | {
+          id?: string;
+          body?: string;
+          created_at?: string;
+          status?: string;
+          message_type?: string | null;
+        }
       | null
       | undefined;
     const flat: Record<string, unknown> = {
@@ -115,6 +134,9 @@ export async function GET(request: Request) {
     if (m && typeof m === "object" && m.id && typeof m.body === "string") {
       flat.id = m.id;
       flat.body = m.body;
+      if (m.message_type != null && m.message_type !== "") {
+        flat.message_type = m.message_type;
+      }
     }
     if (desk.name != null) flat.name = desk.name;
     if (desk.location_name != null) flat.location_name = desk.location_name;
@@ -142,7 +164,10 @@ export async function GET(request: Request) {
   // is reconnecting after a network blip). Return without touching realtime.
   try {
     const pre = await fetchQueuedNote();
-    if (pre) return NextResponse.json(withContext({ message: pre }));
+    if (pre) {
+      const enriched = await attachMessageType(pre);
+      return NextResponse.json(withContext({ message: enriched }));
+    }
   } catch (err) {
     return NextResponse.json(
       { error: "query_failed", detail: (err as Error).message },
@@ -153,19 +178,27 @@ export async function GET(request: Request) {
   // Slow path: subscribe and block until INSERT or timeout.
   const payload = await new Promise<QueuedNote | null>((resolve) => {
     let resolved = false;
-    const finish = (value: QueuedNote | null) => {
+    const finish = async (value: QueuedNote | null) => {
       if (resolved) return;
       resolved = true;
       auth.supabase.removeChannel(channel).catch(() => {});
       clearTimeout(timer);
       request.signal.removeEventListener("abort", onAbort);
-      resolve(value);
+      let out = value;
+      if (value?.id) {
+        try {
+          out = await attachMessageType(value);
+        } catch {
+          out = value;
+        }
+      }
+      resolve(out);
     };
 
-    const onAbort = () => finish(null);
+    const onAbort = () => void finish(null);
     request.signal.addEventListener("abort", onAbort);
 
-    const timer = setTimeout(() => finish(null), WAIT_TIMEOUT_MS);
+    const timer = setTimeout(() => void finish(null), WAIT_TIMEOUT_MS);
 
     const channel = auth.supabase
       .channel(`desknote-wait-${auth.deviceId}-${Date.now()}`)
@@ -182,7 +215,7 @@ export async function GET(request: Request) {
             recipient_id?: string;
           };
           if (!row?.id || !row?.body || row?.status !== "queued") return;
-          finish({
+          void finish({
             id: row.id,
             body: row.body,
             created_at: row.created_at ?? new Date().toISOString(),
@@ -196,7 +229,7 @@ export async function GET(request: Request) {
         if (status !== "SUBSCRIBED") return;
         try {
           const gap = await fetchQueuedNote();
-          if (gap) finish(gap);
+          if (gap) void finish(gap);
         } catch {
           // Ignore; the timeout path will still resolve.
         }
