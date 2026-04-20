@@ -59,7 +59,7 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://desknote.space";
 const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
-const char* kFirmwareVersion = "hello-0.5";
+const char* kFirmwareVersion = "hello-0.6";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -123,6 +123,8 @@ struct LatestResult {
   String deskName;
   String deskLocation;
   String ownerName;
+  String themeId;
+  String accentId; // JSON key accent_color
 };
 
 // First-boot-only: the pairing code we just got back from /register. We
@@ -248,77 +250,209 @@ bool jsonContainsKeyValue(const String& json, const char* key, const char* value
   return json.indexOf(needle) >= 0;
 }
 
+// Desk theme + accent from the web app (matches lib/devices/themes + accents).
+// TFT is 16-bit; these are rough approximations of the app's palette.
+String gThemeId   = "cream";
+String gAccentId  = "";
+
+struct ThemePalette {
+  uint16_t bg;
+  uint16_t headerBar;
+  uint16_t accent;
+  uint16_t title;
+  uint16_t body;
+  uint16_t subtle;
+};
+
+ThemePalette paletteForDesk() {
+  ThemePalette p{};
+  const String& t = gThemeId.length() ? gThemeId : String("cream");
+  const String& a = gAccentId;
+
+  auto accentFromId = [&](const String& id) -> uint16_t {
+    if (id == "rose") return 0xF813;
+    if (id == "blush") return 0xEC9D;
+    if (id == "plum") return 0x801F;
+    if (id == "sage") return 0x3529;
+    if (id == "cream") return 0xBDD7;
+    return 0xF813;
+  };
+
+  uint16_t acc = accentFromId(a.length() ? a : String("rose"));
+
+  if (t == "blush") {
+    p.bg = 0x2008;
+    p.headerBar = 0x380C;
+    p.accent = acc;
+    p.title = 0xFFFF;
+    p.body = 0xFFDD;
+    p.subtle = 0xC99A;
+  } else if (t == "plum") {
+    p.bg = 0x0804;
+    p.headerBar = 0x1806;
+    p.accent = acc;
+    p.title = 0xFFFF;
+    p.body = 0xF79E;
+    p.subtle = 0xB5B6;
+  } else if (t == "sage") {
+    p.bg = 0x0208;
+    p.headerBar = 0x032C;
+    p.accent = acc;
+    p.title = 0xFFFF;
+    p.body = 0xE6F2;
+    p.subtle = 0x8C99;
+  } else {
+    // cream (default)
+    p.bg = 0x0000;
+    p.headerBar = 0x1082;
+    p.accent = acc;
+    p.title = 0xFFFF;
+    p.body = 0xF79E;
+    p.subtle = 0x8C71;
+  }
+  return p;
+}
+
+// TFT fonts are mostly Latin-1; multi-byte UTF-8 (emoji) won't render. Map
+// common sequences to ASCII so hearts and sparkles still read as intent.
+String printableNoteBody(const String& in) {
+  String out;
+  out.reserve(in.length() + 8);
+  for (size_t i = 0; i < in.length();) {
+    const uint8_t b0 = (uint8_t)in[i];
+
+    // U+2764 HEART (E2 9D A4) optional U+FE0F (EF B8 8F)
+    if (i + 2 < in.length() && b0 == 0xE2 && (uint8_t)in[i + 1] == 0x9D &&
+        (uint8_t)in[i + 2] == 0xA4) {
+      out += "<3";
+      i += 3;
+      if (i + 2 < in.length() && (uint8_t)in[i] == 0xEF &&
+          (uint8_t)in[i + 1] == 0xB8 && (uint8_t)in[i + 2] == 0x8F)
+        i += 3;
+      continue;
+    }
+    // U+2728 SPARKLES (E2 9C A8)
+    if (i + 2 < in.length() && b0 == 0xE2 && (uint8_t)in[i + 1] == 0x9C &&
+        (uint8_t)in[i + 2] == 0xA8) {
+      out += " * ";
+      i += 3;
+      continue;
+    }
+    // U+2014 em dash etc. -> ASCII
+    if (i + 2 < in.length() && b0 == 0xE2 && (uint8_t)in[i + 1] == 0x80 &&
+        (uint8_t)in[i + 2] == 0x94) {
+      out += "-";
+      i += 3;
+      continue;
+    }
+
+    if (b0 < 0x80) {
+      out += (char)b0;
+      i += 1;
+      continue;
+    }
+
+    // Skip well-formed UTF-8 non-ASCII (letters with accents, emoji, etc.)
+    size_t skip = 1;
+    if ((b0 & 0xE0) == 0xC0 && i + 1 < in.length())
+      skip = 2;
+    else if ((b0 & 0xF0) == 0xE0 && i + 2 < in.length())
+      skip = 3;
+    else if ((b0 & 0xF8) == 0xF0 && i + 3 < in.length())
+      skip = 4;
+    out += '?';
+    i += skip;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Drawing helpers
 // ---------------------------------------------------------------------------
-void drawHeader() {
-  tft.fillScreen(TFT_BLACK);
+void drawChromeHeader() {
+  ThemePalette pal = paletteForDesk();
+  tft.fillScreen(pal.bg);
+  tft.fillRoundRect(0, 0, tft.width(), 52, 10, pal.headerBar);
 
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(pal.title, pal.headerBar);
   tft.setTextFont(4);
-  tft.setCursor(10, 12);
+  tft.setCursor(12, 10);
   tft.print("DeskNote");
 
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setTextColor(pal.subtle, pal.headerBar);
   tft.setTextFont(2);
-  tft.setCursor(10, 50);
-  tft.print("A tiny message board for two.");
+  tft.setCursor(12, 34);
+  tft.print("For two");
+
+  // Firmware build — matches kFirmwareVersion; server syncs via X-Firmware-Version.
+  const String ver = kFirmwareVersion;
+  tft.setTextFont(2);
+  const int16_t tw = tft.textWidth(ver.c_str());
+  tft.setTextColor(pal.accent, pal.headerBar);
+  tft.setCursor(tft.width() - tw - 10, 14);
+  tft.print(ver);
 }
 
 void drawStatus(const String& status, uint16_t color = TFT_WHITE) {
+  ThemePalette pal = paletteForDesk();
   const int16_t y = 210;
-  tft.fillRect(0, y - 5, tft.width(), 35, TFT_BLACK);
+  tft.fillRect(0, y - 5, tft.width(), 35, pal.bg);
 
-  tft.setTextColor(color, TFT_BLACK);
+  tft.setTextColor(color, pal.bg);
   tft.setTextFont(2);
   tft.setCursor(10, y);
   tft.print(status);
 }
 
 void clearBody() {
-  tft.fillRect(0, 75, tft.width(), 130, TFT_BLACK);
+  ThemePalette pal = paletteForDesk();
+  tft.fillRect(0, 58, tft.width(), 152, pal.bg);
 }
 
 void drawPairingCode(const String& code) {
+  drawChromeHeader();
+  ThemePalette pal = paletteForDesk();
   clearBody();
 
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setTextColor(pal.accent, pal.bg);
   tft.setTextFont(2);
-  tft.setCursor(10, 82);
+  tft.setCursor(10, 70);
   tft.print("Pairing code");
 
   // Font 7 is the built-in 7-segment style font; digits-only. Our pairing
   // codes are 6 decimal digits, which matches.
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(pal.title, pal.bg);
   tft.setTextFont(7);
-  tft.setCursor(10, 108);
+  tft.setCursor(10, 96);
   tft.print(code);
 }
 
 void drawWaitingForNote(const String& deskName,
                         const String& deskLocation,
                         const String& ownerName) {
+  drawChromeHeader();
+  ThemePalette pal = paletteForDesk();
   clearBody();
 
-  tft.setTextColor(TFT_SKYBLUE, TFT_BLACK);
+  tft.setTextColor(pal.accent, pal.bg);
   tft.setTextFont(4);
-  tft.setCursor(10, 88);
+  tft.setCursor(10, 68);
   tft.print("Paired");
 
   // Line 2: desk name (the one you typed in the pair form). Provides clear
   // visual proof that the correct account claimed this hardware.
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(pal.title, pal.bg);
   tft.setTextFont(4);
-  tft.setCursor(10, 120);
+  tft.setCursor(10, 100);
   if (deskName.length()) {
     tft.print(deskName);
   } else {
     tft.print("This desk");
   }
 
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setTextColor(pal.subtle, pal.bg);
   tft.setTextFont(2);
-  tft.setCursor(10, 154);
+  tft.setCursor(10, 138);
   String sub;
   if (deskLocation.length()) {
     sub += deskLocation;
@@ -340,20 +474,24 @@ void drawWaitingForNote(const String& deskName,
 // 320-px screen works well. Note bodies are bounded at 140 chars by the
 // server, which fits in ~5 lines.
 void drawMessage(const String& body) {
+  drawChromeHeader();
+  ThemePalette pal = paletteForDesk();
   clearBody();
 
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  const String printable = printableNoteBody(body);
+
+  tft.setTextColor(pal.accent, pal.bg);
   tft.setTextFont(2);
-  tft.setCursor(10, 80);
+  tft.setCursor(10, 64);
   tft.print("New note");
 
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(pal.body, pal.bg);
   tft.setTextFont(4);
 
   const int16_t  xStart      = 10;
   const int16_t  xMax        = tft.width() - 10;
   const uint16_t lineHeight  = 28;
-  int16_t        y           = 100;
+  int16_t        y           = 88;
 
   String word;
   String line;
@@ -377,8 +515,8 @@ void drawMessage(const String& body) {
     }
   };
 
-  for (size_t i = 0; i <= body.length(); ++i) {
-    const char c = i < body.length() ? body[i] : '\0';
+  for (size_t i = 0; i <= printable.length(); ++i) {
+    const char c = i < printable.length() ? printable[i] : '\0';
     if (c == '\n' || c == '\0' || c == ' ' || c == '\t') {
       pushWord(word);
       word = "";
@@ -393,17 +531,19 @@ void drawMessage(const String& body) {
 }
 
 void drawErrorBox(const String& line1, const String& line2) {
+  drawChromeHeader();
+  ThemePalette pal = paletteForDesk();
   clearBody();
 
-  tft.setTextColor(TFT_RED, TFT_BLACK);
+  tft.setTextColor(TFT_RED, pal.bg);
   tft.setTextFont(4);
-  tft.setCursor(10, 82);
+  tft.setCursor(10, 70);
   tft.print("Problem");
 
   const size_t maxChars = 50;
-  int16_t y = 120;
+  int16_t y = 108;
   auto drawWrapped = [&](const String& line) {
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(pal.body, pal.bg);
     tft.setTextFont(2);
     size_t i = 0;
     while (i < line.length() && y < 205) {
@@ -418,15 +558,54 @@ void drawErrorBox(const String& line1, const String& line2) {
 }
 
 // ---------------------------------------------------------------------------
-// Wi-Fi
+// Wi-Fi — compile-time defaults, or NVS namespace "deskwifi" (ssid / pass)
+// written over USB serial JSON: {"ssid":"...","pass":"..."}  (see /devices/connect-wifi)
 // ---------------------------------------------------------------------------
+void trySerialWifiProvision() {
+  if (Serial.available() == 0) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.length() < 8 || line[0] != '{') return;
+
+  String ssid;
+  String pass;
+  if (!extractJsonString(line, "ssid", ssid) || !extractJsonString(line, "pass", pass)) {
+    Serial.println(F("{\"ok\":false,\"error\":\"need_ssid_pass_json\"}"));
+    return;
+  }
+  if (ssid.length() == 0) {
+    Serial.println(F("{\"ok\":false,\"error\":\"empty_ssid\"}"));
+    return;
+  }
+
+  prefs.begin("deskwifi", /*readOnly=*/false);
+  prefs.putString("ssid", ssid);
+  prefs.putString("pass", pass);
+  prefs.end();
+
+  Serial.println(F("{\"ok\":true,\"reboot\":true}"));
+  delay(400);
+  ESP.restart();
+}
+
 bool connectWifi() {
-  Serial.printf("Connecting to %s\n", WIFI_SSID);
+  prefs.begin("deskwifi", /*readOnly=*/true);
+  const String nvsSsid = prefs.getString("ssid", "");
+  const String nvsPass = prefs.getString("pass", "");
+  prefs.end();
+
+  const char* useSsid =
+      nvsSsid.length() ? nvsSsid.c_str() : WIFI_SSID;
+  const char* usePass =
+      nvsPass.length() ? nvsPass.c_str() : WIFI_PASSWORD;
+
+  Serial.printf("Connecting to %s (NVS=%s)\n", useSsid,
+                nvsSsid.length() ? "yes" : "compile-time");
   drawStatus("Connecting to Wi-Fi...");
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(useSsid, usePass);
 
   const uint32_t started = millis();
   while (WiFi.status() != WL_CONNECTED &&
@@ -542,6 +721,7 @@ LatestResult fetchLatest() {
   String bearer = "Bearer ";
   bearer += creds.deviceToken;
   http.addHeader("Authorization", bearer);
+  http.addHeader("X-Firmware-Version", kFirmwareVersion);
 
   const int    status  = http.GET();
   const String payload = http.getString();
@@ -562,6 +742,8 @@ LatestResult fetchLatest() {
   extractJsonString(payload, "name", r.deskName);
   extractJsonString(payload, "location_name", r.deskLocation);
   extractJsonString(payload, "display_name", r.ownerName);
+  extractJsonString(payload, "theme", r.themeId);
+  extractJsonString(payload, "accent_color", r.accentId);
 
   String body;
   String id;
@@ -590,6 +772,7 @@ bool markSeen(const String& noteId) {
   http.addHeader("Authorization", bearer);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Id", creds.deviceId);
+  http.addHeader("X-Firmware-Version", kFirmwareVersion);
 
   String body = "{\"note_id\":\"";
   body += noteId;
@@ -615,6 +798,8 @@ void enterUnpaired(const String& code) {
 String lastPairedDeskName;
 String lastPairedDeskLocation;
 String lastPairedOwnerName;
+String lastRenderedThemeId;
+String lastRenderedAccentId;
 
 void enterWaitingForNote(const String& deskName,
                          const String& deskLocation,
@@ -623,7 +808,9 @@ void enterWaitingForNote(const String& deskName,
       displayState == DisplayState::WaitingForNote &&
       deskName == lastPairedDeskName &&
       deskLocation == lastPairedDeskLocation &&
-      ownerName == lastPairedOwnerName;
+      ownerName == lastPairedOwnerName &&
+      gThemeId == lastRenderedThemeId &&
+      gAccentId == lastRenderedAccentId;
   if (alreadyShowing) return;
   drawWaitingForNote(deskName, deskLocation, ownerName);
   drawStatus("Paired and online.", TFT_GREEN);
@@ -631,6 +818,8 @@ void enterWaitingForNote(const String& deskName,
   lastPairedDeskName      = deskName;
   lastPairedDeskLocation  = deskLocation;
   lastPairedOwnerName     = ownerName;
+  lastRenderedThemeId     = gThemeId;
+  lastRenderedAccentId    = gAccentId;
 }
 
 void enterShowingMessage(const String& body) {
@@ -683,7 +872,7 @@ void setup() {
   tft.init();
   tft.setRotation(1);
 
-  drawHeader();
+  drawChromeHeader();
   drawStatus("Booting...");
 
 #if FORCE_REREGISTER
@@ -753,6 +942,9 @@ void pollOnce() {
   // Paired from here on.
   bootPairingCode = "";
 
+  if (latest.themeId.length()) gThemeId = latest.themeId;
+  if (latest.accentId.length()) gAccentId = latest.accentId;
+
   if (latest.hasMessage) {
     if (latest.messageId != currentNoteId) {
       Serial.printf("New note %s: %s\n",
@@ -773,6 +965,8 @@ void pollOnce() {
 }
 
 void loop() {
+  trySerialWifiProvision();
+
   static uint32_t lastLog = 0;
   const uint32_t  now     = millis();
 

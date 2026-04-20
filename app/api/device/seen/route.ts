@@ -55,5 +55,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "update_failed", detail: updateErr.message }, { status: 500 });
   }
 
+  const fwHeader = request.headers.get("x-firmware-version")?.trim().slice(0, 32);
+  if (fwHeader) {
+    await auth.supabase
+      .from("devices")
+      .update({ firmware_version: fwHeader })
+      .eq("id", auth.deviceId);
+  }
+
   return NextResponse.json({ ok: true });
 }

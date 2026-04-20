@@ -45,12 +45,18 @@ export async function GET(request: Request) {
   const auth = await requireDeviceAuth(request, url);
   if (auth instanceof NextResponse) return auth;
 
-  // Cheap liveness bump — same as /api/device/latest does.
+  const fwHeader = request.headers.get("x-firmware-version")?.trim().slice(0, 32);
   const now = new Date().toISOString();
-  await auth.supabase
-    .from("devices")
-    .update({ last_seen_at: now, online: true })
-    .eq("id", auth.deviceId);
+
+  // Liveness + optional firmware version sync (desk may have been registered
+  // on an older sketch; header keeps the Devices card truthful without re-pair).
+  const livenessPatch: Record<string, string | boolean> = {
+    last_seen_at: now,
+    online: true,
+  };
+  if (fwHeader) livenessPatch.firmware_version = fwHeader;
+
+  await auth.supabase.from("devices").update(livenessPatch).eq("id", auth.deviceId);
 
   if (!auth.ownerId) {
     return NextResponse.json({ message: null, reason: "unpaired" });
@@ -63,7 +69,7 @@ export async function GET(request: Request) {
   const [deskRes, ownerRes] = await Promise.all([
     auth.supabase
       .from("devices")
-      .select("name, location_name")
+      .select("name, location_name, theme, accent_color")
       .eq("id", auth.deviceId)
       .maybeSingle(),
     auth.supabase
@@ -76,6 +82,8 @@ export async function GET(request: Request) {
   const desk = {
     name: (deskRes.data?.name as string | null) ?? null,
     location_name: (deskRes.data?.location_name as string | null) ?? null,
+    theme: (deskRes.data?.theme as string | null) ?? null,
+    accent_color: (deskRes.data?.accent_color as string | null) ?? null,
   };
   const owner = {
     display_name: (ownerRes.data?.display_name as string | null) ?? null,
@@ -101,6 +109,8 @@ export async function GET(request: Request) {
     if (desk.name != null) flat.name = desk.name;
     if (desk.location_name != null) flat.location_name = desk.location_name;
     if (owner.display_name != null) flat.display_name = owner.display_name;
+    if (desk.theme != null) flat.theme = desk.theme;
+    if (desk.accent_color != null) flat.accent_color = desk.accent_color;
     return flat;
   };
 

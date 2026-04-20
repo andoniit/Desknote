@@ -148,15 +148,29 @@ the four constants near the top of the file:
 ```cpp
 const char* WIFI_SSID        = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD    = "YOUR_WIFI_PASSWORD";
-const char* kServerBaseUrl   = "http://10.0.0.85:3000"; // your Mac's LAN IP + Next port
+const char* kServerBaseUrl   = "https://desknote.space"; // or http://10.0.0.85:3000 for local dev
 const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
 ```
 
-`kServerBaseUrl` must be reachable from the ESP32. Use your Mac's LAN IP
-(e.g. `http://10.0.0.85:3000`) — **not** `localhost` or `127.0.0.1`, which
-resolve to the ESP32 itself. `kDeviceApiKey` must match the
-`DEVICE_API_KEY` value in your running server's `.env.local` (see
-section 6a below).
+`kServerBaseUrl` must be reachable from the ESP32. For local dev use your
+Mac's LAN IP (e.g. `http://10.0.0.85:3000`) — **not** `localhost` or
+`127.0.0.1`, which resolve to the ESP32 itself. Production uses HTTPS
+(`https://desknote.space`). `kDeviceApiKey` must match `DEVICE_API_KEY` in
+`.env.local` or Vercel.
+
+**Wi-Fi without editing the sketch again:** after flashing once, open
+**Devices → [Connect over USB](https://desknote.space/devices/connect-wifi)**
+in Chrome and send `{"ssid":"…","pass":"…"}` over Web Serial, or paste the
+same JSON line into Arduino Serial Monitor @ 115200 baud. The firmware
+stores SSID/password in NVS (`deskwifi` namespace) and reboots; compile-time
+`WIFI_*` values are only a fallback when NVS is empty.
+
+**Firmware / theme on screen:** the sketch shows `hello-0.x` in the header and
+syncs that string to the web app via the `X-Firmware-Version` header on each
+`/api/device/wait` call, so the Devices card shows the same build. Desk
+**theme** and **accent** from the pair/settings forms are applied as
+background and highlight colours on the TFT (emoji in notes are mapped to
+ASCII-friendly text because built-in fonts are not emoji-capable).
 
 Then click **Verify** (✓). The first compile takes a minute because Arduino
 has to build the ESP32 core.

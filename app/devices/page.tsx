@@ -72,6 +72,17 @@ export default async function DevicesPage() {
       </section>
 
       <section className="max-w-xl space-y-3 sm:space-y-4">
+        <SectionLabel as="h2">Wi-Fi (USB)</SectionLabel>
+        <p className="text-sm text-plum-300">
+          Set the desk&apos;s network without editing the Arduino sketch —{" "}
+          <a href="/devices/connect-wifi" className="font-medium text-plum-500 underline underline-offset-2">
+            connect over USB
+          </a>{" "}
+          (Chrome) or use the Serial Monitor fallback on the same page.
+        </p>
+      </section>
+
+      <section className="max-w-xl space-y-3 sm:space-y-4">
         <SectionLabel as="h2">Pair a new desk</SectionLabel>
         <PairDeviceForm />
       </section>
