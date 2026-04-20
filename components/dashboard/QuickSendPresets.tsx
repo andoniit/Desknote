@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { sendDeskMessages } from "@/app/actions/messages";
 import type { PairedDeviceRow } from "@/lib/data/paired-devices";
 import { QUICK_SEND_PRESETS, type QuickSendTargetId } from "@/lib/messages/quick-presets";
@@ -17,36 +17,57 @@ type Props = {
   partnerUserId: string | null;
 };
 
-const TARGETS: {
-  id: QuickSendTargetId;
-  label: string;
-  short: string;
-  disabled?: (p: Props) => boolean;
-}[] = [
-  { id: "my_desk", label: "My desk", short: "Mine" },
-  {
-    id: "her_desk",
-    label: "Her desk",
-    short: "Hers",
-    disabled: (p) => !p.hasPartner,
-  },
-  {
-    id: "both",
-    label: "Both",
-    short: "Both",
-    disabled: (p) => !p.hasPartner || p.devices.length < 2,
-  },
-];
-
 export function QuickSendPresets(props: Props) {
   const { devices, hasPartner, viewerUserId, partnerUserId } = props;
   const { push } = useDeskToast();
-  const [target, setTarget] = useState<QuickSendTargetId>("my_desk");
   const [error, setError] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  if (!devices.length) return null;
+  // Only show a button when the corresponding desk actually exists on the
+  // viewer's or partner's side. After unpairing your own desk, "My desk"
+  // should disappear instead of silently failing to resolve at send time.
+  const myDeskCount = devices.filter((d) => d.owner_id === viewerUserId).length;
+  const herDeskCount = partnerUserId
+    ? devices.filter((d) => d.owner_id === partnerUserId).length
+    : 0;
+
+  const targets = useMemo(
+    () =>
+      [
+        myDeskCount > 0 && { id: "my_desk" as const, label: "My desk", short: "Mine" },
+        hasPartner &&
+          herDeskCount > 0 && {
+            id: "her_desk" as const,
+            label: "Her desk",
+            short: "Hers",
+          },
+        hasPartner &&
+          myDeskCount > 0 &&
+          herDeskCount > 0 && { id: "both" as const, label: "Both", short: "Both" },
+      ].filter(Boolean) as {
+        id: QuickSendTargetId;
+        label: string;
+        short: string;
+      }[],
+    [hasPartner, herDeskCount, myDeskCount]
+  );
+
+  const [target, setTarget] = useState<QuickSendTargetId>(
+    () => targets[0]?.id ?? "my_desk"
+  );
+
+  // If the desk lineup changes (user unpairs, partner pairs), snap the
+  // selected target back to the first still-available option.
+  useEffect(() => {
+    if (targets.length === 0) return;
+    if (!targets.some((t) => t.id === target)) {
+      setTarget(targets[0].id);
+    }
+  }, [target, targets]);
+
+  // No sendable desk at all - hide the whole panel.
+  if (!devices.length || targets.length === 0) return null;
 
   function sendPreset(text: string, presetId: string) {
     setError(null);
@@ -96,20 +117,17 @@ export function QuickSendPresets(props: Props) {
           Send to
         </p>
         <div className="flex gap-1.5">
-          {TARGETS.map((t) => {
-            const disabledByProps = t.disabled?.(props) ?? false;
+          {targets.map((t) => {
             const active = target === t.id;
             return (
               <button
                 key={t.id}
                 type="button"
-                disabled={disabledByProps}
                 title={t.label}
                 onClick={() => setTarget(t.id)}
                 className={cn(
                   "min-h-10 flex-1 rounded-2xl px-2 py-2 text-xs font-medium transition-all sm:px-3",
                   "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-rose-100/80",
-                  "disabled:cursor-not-allowed disabled:opacity-40",
                   active
                     ? "bg-plum-500 text-cream shadow-soft"
                     : "bg-white/80 text-plum-400 ring-1 ring-plum-100/60 hover:bg-blush-50/90 hover:text-plum-500"

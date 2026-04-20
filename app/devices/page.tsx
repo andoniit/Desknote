@@ -32,11 +32,7 @@ export default async function DevicesPage() {
         description="Pair each ESP32 once, give it a name and a corner of your home, then watch when it was last awake."
       />
 
-      <div className="mb-8 max-w-xl sm:mb-10">
-        <PairDeviceForm />
-      </div>
-
-      <section className="space-y-3 sm:space-y-4">
+      <section className="mb-8 space-y-3 sm:mb-10 sm:space-y-4">
         <SectionLabel as="h2">Your desks</SectionLabel>
 
         {list.length === 0 ? (
@@ -73,6 +69,11 @@ export default async function DevicesPage() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className="max-w-xl space-y-3 sm:space-y-4">
+        <SectionLabel as="h2">Pair a new desk</SectionLabel>
+        <PairDeviceForm />
       </section>
     </AppShell>
   );
