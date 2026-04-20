@@ -127,12 +127,26 @@ void drawPairingError(const String& line1, const String& line2) {
   tft.setCursor(10, 88);
   tft.print("Provisioning failed");
 
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextFont(2);
-  tft.setCursor(10, 130);
-  tft.print(line1);
-  tft.setCursor(10, 150);
-  tft.print(line2);
+  // Rough wrap so long Postgres error strings stay readable on the TFT.
+  // TFT_eSPI font 2 is ~6 px wide; 300 px of screen ≈ 50 chars per line.
+  const size_t maxChars = 50;
+  const int16_t xStart  = 10;
+  int16_t y = 130;
+
+  auto drawWrapped = [&](const String& line) {
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextFont(2);
+    size_t i = 0;
+    while (i < line.length() && y < 200) {
+      tft.setCursor(xStart, y);
+      tft.print(line.substring(i, i + maxChars));
+      i += maxChars;
+      y += 18;
+    }
+  };
+
+  drawWrapped(line1);
+  drawWrapped(line2);
 }
 
 void drawStatus(const String& status, uint16_t color = TFT_WHITE) {
@@ -205,6 +219,10 @@ bool extractJsonError(const String& json, String& out) {
   return extractJsonString(json, "error", out);
 }
 
+bool extractJsonDetail(const String& json, String& out) {
+  return extractJsonString(json, "detail", out);
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/device/register
 // ---------------------------------------------------------------------------
@@ -247,7 +265,12 @@ RegistrationResult registerWithServer() {
 
   if (status != 200) {
     String err;
-    if (extractJsonError(payload, err) && err.length()) {
+    String detail;
+    extractJsonError(payload, err);
+    extractJsonDetail(payload, detail);
+    if (err.length() && detail.length()) {
+      r.errorDetail = err + ": " + detail;
+    } else if (err.length()) {
       r.errorDetail = err;
     } else if (status < 0) {
       r.errorDetail = HTTPClient::errorToString(status);
