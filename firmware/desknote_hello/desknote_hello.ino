@@ -71,7 +71,7 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://desknote.space";
 const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
-const char* kFirmwareVersion = "hello-1.8";
+const char* kFirmwareVersion = "hello-2.1";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -166,6 +166,13 @@ String bootPairingCode;
 
 // Track the note we're currently rendering so we only redraw on change.
 String currentNoteId;
+
+/// Absolute millis deadline; quick-send line shows only while millis() < this.
+uint32_t gLittleTapUntilMs = 0;
+static constexpr uint32_t kLittleTapVisibleMs = 5UL * 60UL * 1000UL;
+
+/// Last "Write a message" (standard) body — kept on device so quick_send can sit below it.
+String gPersistedMainMessage;
 
 enum class DisplayState {
   Boot,
@@ -754,16 +761,36 @@ void drawWaitingForNote(const String& deskName,
   tft.print(sub);
 }
 
-// Full-screen centered note (pixel GLCD + Twemoji). Fixed beige + black for this
-// screen (not theme-driven). Footer: DeskNote-{desk name} when showFooter.
-void drawMessageScreen(const String& body, const String& deskName, bool showFooter,
-                       const String& messageType) {
-  constexpr uint16_t kNoteBg = 0xF79E;  // ~beige RGB565
-  tft.fillScreen(kNoteBg);
+// Full-screen centered note (pixel GLCD + Twemoji). Outer frame is black; an inset
+// rounded panel is #F5F5DC (beige); body text #C4A484. Long (standard) message is
+// centered in the beige area; quick_send line is separate, below the main text,
+// for 5 minutes. Footer on black: DeskNote-{desk name} when showFooter.
+void drawMessageScreen(const String& mainBody, const String& deskName, bool showFooter,
+                       const String& messageType, const String& tapBody) {
+  // #F5F5DC / #C4A484 — fixed RGB565 (not theme-driven).
+  constexpr uint16_t kNoteBeige = 0xF7BB;
+  constexpr uint16_t kNoteFg    = 0xC530;
+  constexpr int16_t  kFrame     = 8;
+  constexpr int16_t  kPanelPad  = 10;
 
-  const int16_t xMargin = 12;
+  tft.fillScreen(TFT_BLACK);
+
+  deskFontChromeMeta();
+  const int16_t footerLineH = (int16_t)(8 * kDeskFontScaleBody + 4);
+  const int16_t footerY =
+      showFooter ? (int16_t)(tft.height() - 10 - footerLineH) : (int16_t)(tft.height());
+  // Beige layer stops above the footer strip so the label reads on black.
+  const int16_t beigeBottom =
+      showFooter ? (int16_t)(footerY - 8) : (int16_t)(tft.height() - kFrame);
+  const int16_t beigeH = (int16_t)(beigeBottom - kFrame);
+  if (beigeH > 28) {
+    tft.fillRoundRect(kFrame, kFrame, (int16_t)(tft.width() - 2 * kFrame), beigeH, 12,
+                      kNoteBeige);
+  }
+
+  const int16_t xMargin = (int16_t)(kFrame + kPanelPad);
   std::vector<NoteBodyItem> items;
-  tokenizeNoteBodyItems(body, items);
+  tokenizeNoteBodyItems(mainBody, items);
 
   std::vector<std::vector<NoteBodyItem>> rows;
   collectWrappedNoteRows(items, xMargin, rows);
@@ -777,22 +804,16 @@ void drawMessageScreen(const String& body, const String& deskName, bool showFoot
   constexpr size_t kMaxNoteRows = 10;
   while (rows.size() > kMaxNoteRows) rows.pop_back();
 
-  deskFontChromeMeta();
-  const int16_t footerLineH = (int16_t)(8 * kDeskFontScaleBody + 4);
-  const int16_t footerY =
-      showFooter ? (int16_t)(tft.height() - 10 - footerLineH) : (int16_t)(tft.height());
-  const bool showTap = (messageType == "quick_send");
-  deskFontLittleTap();
-  const int16_t tapLineH = showTap ? (int16_t)(8 + 6) : (int16_t)0;
-  const int16_t tapGap   = showTap ? 8 : 0;
-  const int16_t contentBottom =
-      showFooter ? (int16_t)(footerY - 12 - tapLineH - tapGap) : (int16_t)(tft.height() - 10);
-  const int16_t contentTop = 14;
-  const int32_t totalMsgH  = (int32_t)rows.size() * (int32_t)lineHeight;
-  const int32_t extraTap   = (int32_t)tapLineH + (int32_t)tapGap;
-  const int32_t availH     = (int32_t)contentBottom - (int32_t)contentTop;
-  int16_t       y0         = (int16_t)(contentTop + (availH - totalMsgH - extraTap) / 2);
-  if (y0 < 8) y0 = 8;
+  const int16_t contentBottom = (int16_t)(beigeBottom - kPanelPad);
+  const int16_t contentTop    = (int16_t)(kFrame + kPanelPad);
+  const int32_t totalMsgH    = (int32_t)rows.size() * (int32_t)lineHeight;
+  const int32_t availH       = (int32_t)contentBottom - (int32_t)contentTop;
+  int16_t       y0           = (int16_t)(contentTop + (availH - totalMsgH) / 2);
+  if (y0 < contentTop) y0 = contentTop;
+
+  const bool showTap = (messageType == "quick_send" && tapBody.length() > 0 &&
+                        gLittleTapUntilMs != 0 && millis() < gLittleTapUntilMs);
+  constexpr int16_t kTapGap = 8;
 
   for (size_t r = 0; r < rows.size(); ++r) {
     int32_t rw = 0;
@@ -803,7 +824,7 @@ void drawMessageScreen(const String& body, const String& deskName, bool showFoot
     int16_t x = (int16_t)((tft.width() - rw) / 2);
     int16_t y = (int16_t)(y0 + (int32_t)r * (int32_t)lineHeight);
 
-    tft.setTextColor(TFT_BLACK, kNoteBg);
+    tft.setTextColor(kNoteFg, kNoteBeige);
     for (size_t i = 0; i < rows[r].size(); ++i) {
       const NoteBodyItem& it = rows[r][i];
       if (it.isEmoji) {
@@ -824,49 +845,41 @@ void drawMessageScreen(const String& body, const String& deskName, bool showFoot
 
   if (showTap) {
     deskFontLittleTap();
-    tft.setTextColor(TFT_BLACK, kNoteBg);
-    const char* tapLabel = "Little tap";
-    const int16_t tapY   = (int16_t)(y0 + totalMsgH + tapGap);
-    const int16_t tapX =
-        (int16_t)((tft.width() - tft.textWidth(tapLabel)) / 2);
-    tft.setCursor(tapX, tapY);
-    tft.print(tapLabel);
+    tft.setTextColor(kNoteFg, kNoteBeige);
+    const int16_t tapY = (int16_t)(y0 + totalMsgH + kTapGap);
+    const int16_t tapW = tft.textWidth(tapBody.c_str());
+    if (tapY + 14 < beigeBottom && tapW <= tft.width() - 2 * xMargin) {
+      const int16_t tapX = (int16_t)((tft.width() - tapW) / 2);
+      tft.setCursor(tapX, tapY);
+      tft.print(tapBody);
+    } else if (tapY + 14 < beigeBottom) {
+      // Long preset: single line, clipped from the left margin
+      tft.setCursor(xMargin, tapY);
+      tft.print(tapBody);
+    }
   }
 
   if (showFooter) {
     deskFontChromeMeta();
     int16_t x = xMargin;
-    tft.setTextColor(TFT_BLACK, kNoteBg);
+    tft.setTextColor(kNoteFg, TFT_BLACK);
     tft.setCursor(x, footerY);
     tft.print("DeskNote-");
     tft.print(deskName.length() ? deskName.c_str() : "Desk");
   }
 }
 
-static size_t utf8AdvancePos(const String& s, size_t i) {
-  if (i >= s.length()) return i;
-  const uint8_t b = (uint8_t)s[i];
-  if (b < 0x80) return i + 1;
-  if ((b & 0xE0) == 0xC0) return (i + 2 <= s.length()) ? i + 2 : s.length();
-  if ((b & 0xF0) == 0xE0) return (i + 3 <= s.length()) ? i + 3 : s.length();
-  if ((b & 0xF8) == 0xF0) return (i + 4 <= s.length()) ? i + 4 : s.length();
-  return i + 1;
-}
-
-static void playTypingIntro(const String& full, const String& deskName, bool showFooter,
+// Single full draw — no per-character loop (that re-filled the whole screen each
+// frame and caused visible flicker on the panel).
+static void playTypingIntro(const String& mainPart, const String& tapPart,
+                            const String& deskName, bool showFooter,
                             const String& messageType) {
-  if (full.length() == 0) {
-    drawMessageScreen("", deskName, showFooter, "");
-    return;
+  if (messageType == "quick_send" && tapPart.length() > 0) {
+    gLittleTapUntilMs = millis() + kLittleTapVisibleMs;
+  } else {
+    gLittleTapUntilMs = 0;
   }
-  size_t end = 0;
-  while (end < full.length()) {
-    end = utf8AdvancePos(full, end);
-    drawMessageScreen(full.substring(0, end), deskName, showFooter, "");
-    delay(26);
-    yield();
-  }
-  drawMessageScreen(full, deskName, showFooter, messageType);
+  drawMessageScreen(mainPart, deskName, showFooter, messageType, tapPart);
 }
 
 void drawErrorBox(const String& line1, const String& line2) {
@@ -1145,6 +1158,8 @@ String lastRenderedIdleBody;
 
 // Note screen: cache body for footer timeout redraw (centered layout).
 String       gCachedNoteBody;
+String       gCachedMainBody;
+String       gCachedTapBody;
 String       gCachedMessageType;
 uint32_t     gNoteShownAtMs        = 0;
 bool         gMessageFooterHidden  = false;
@@ -1154,6 +1169,11 @@ void enterWaitingForNote(const String& deskName,
                          const String& deskLocation,
                          const String& ownerName,
                          const String& lastMessageBody) {
+  // Hero text: prefer the last long-form message we stored so a quick_send note
+  // (newest in API) does not replace it on the idle screen.
+  const String heroBody =
+      (gPersistedMainMessage.length() > 0) ? gPersistedMainMessage : lastMessageBody;
+
   const bool alreadyShowing =
       displayState == DisplayState::WaitingForNote &&
       deskName == lastPairedDeskName &&
@@ -1161,7 +1181,7 @@ void enterWaitingForNote(const String& deskName,
       ownerName == lastPairedOwnerName &&
       gThemeId == lastRenderedThemeId &&
       gAccentId == lastRenderedAccentId &&
-      lastMessageBody == lastRenderedIdleBody;
+      heroBody == lastRenderedIdleBody;
   if (alreadyShowing) return;
 
   lastPairedDeskName     = deskName;
@@ -1169,17 +1189,17 @@ void enterWaitingForNote(const String& deskName,
   lastPairedOwnerName    = ownerName;
   lastRenderedThemeId    = gThemeId;
   lastRenderedAccentId   = gAccentId;
-  lastRenderedIdleBody   = lastMessageBody;
+  lastRenderedIdleBody   = heroBody;
 
   const bool skipIntroFromNote =
       displayState == DisplayState::ShowingMessage && lastMessageBody.length() > 0 &&
       lastMessageBody == gCachedNoteBody;
 
-  if (lastMessageBody.length() > 0) {
+  if (heroBody.length() > 0) {
     if (skipIntroFromNote) {
-      drawMessageScreen(lastMessageBody, deskName, true, "");
+      drawMessageScreen(heroBody, deskName, true, "", "");
     } else {
-      playTypingIntro(lastMessageBody, deskName, true, "");
+      playTypingIntro(heroBody, "", deskName, true, "");
     }
     gNoteShownAtMs       = millis();
     gMessageFooterHidden = false;
@@ -1191,10 +1211,27 @@ void enterWaitingForNote(const String& deskName,
 }
 
 void enterShowingMessage(const String& body, const String& messageType) {
+  String mainPart;
+  String tapPart;
+  if (messageType == "quick_send" && gPersistedMainMessage.length() > 0) {
+    mainPart = gPersistedMainMessage;
+    tapPart  = body;
+  } else {
+    tapPart = "";
+    if (messageType == "quick_send") {
+      mainPart = body;
+    } else {
+      gPersistedMainMessage = body;
+      mainPart              = body;
+    }
+  }
+
   gCachedNoteBody      = body;
+  gCachedMainBody      = mainPart;
+  gCachedTapBody       = tapPart;
   gCachedMessageType   = messageType;
   gMessageFooterHidden = false;
-  playTypingIntro(body, lastPairedDeskName, true, messageType);
+  playTypingIntro(mainPart, tapPart, lastPairedDeskName, true, messageType);
   gNoteShownAtMs = millis();
   displayState     = DisplayState::ShowingMessage;
 }
@@ -1359,15 +1396,24 @@ void loop() {
   // ~25 s server-side, so this loop is naturally paced without sleeps.
   pollOnce();
 
+  if (displayState == DisplayState::ShowingMessage &&
+      gCachedMessageType == "quick_send" && gLittleTapUntilMs != 0 &&
+      millis() >= gLittleTapUntilMs) {
+    gLittleTapUntilMs = 0;
+    drawMessageScreen(gCachedMainBody, lastPairedDeskName, !gMessageFooterHidden,
+                      gCachedMessageType, gCachedTapBody);
+  }
+
   if (!gMessageFooterHidden &&
       (millis() - gNoteShownAtMs) >= kMessageFooterVisibleMs) {
     if (displayState == DisplayState::ShowingMessage) {
       gMessageFooterHidden = true;
-      drawMessageScreen(gCachedNoteBody, lastPairedDeskName, false, gCachedMessageType);
+      drawMessageScreen(gCachedMainBody, lastPairedDeskName, false, gCachedMessageType,
+                        gCachedTapBody);
     } else if (displayState == DisplayState::WaitingForNote &&
                lastRenderedIdleBody.length() > 0) {
       gMessageFooterHidden = true;
-      drawMessageScreen(lastRenderedIdleBody, lastPairedDeskName, false, "");
+      drawMessageScreen(lastRenderedIdleBody, lastPairedDeskName, false, "", "");
     }
   }
 
