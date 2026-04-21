@@ -54,8 +54,8 @@ struct NoteBodyItem {
 // ---------------------------------------------------------------------------
 // Wi-Fi credentials — replace the two placeholders.
 // ---------------------------------------------------------------------------
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "DEEPAANI";
+const char* WIFI_PASSWORD = "DEEPAANI123";
 
 // ---------------------------------------------------------------------------
 // DeskNote server configuration.
@@ -69,8 +69,8 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 // (.env.local for `next dev`, Vercel project env vars for production). If
 // they differ the server returns HTTP 401 from /api/device/register.
 // ---------------------------------------------------------------------------
-const char* kServerBaseUrl   = "https://desknote.space";
-const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
+const char* kServerBaseUrl   = "https://www.desknote.space";
+const char* kDeviceApiKey    = "5c27a1577e9b48d618f4653957e00996efee71c3752afa4d";
 const char* kFirmwareVersion = "hello-2.1";
 
 // ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ String currentNoteId;
 
 /// Absolute millis deadline; quick-send line shows only while millis() < this.
 uint32_t gLittleTapUntilMs = 0;
-static constexpr uint32_t kLittleTapVisibleMs = 5UL * 60UL * 1000UL;
+static constexpr uint32_t kLittleTapVisibleMs = 2UL * 60UL * 1000UL;
 
 /// Last "Write a message" (standard) body — kept on device so quick_send can sit below it.
 String gPersistedMainMessage;
@@ -619,6 +619,27 @@ static inline void deskFontPairingDigits() {
   tft.setTextSize(1);
 }
 
+// Draw a Twemoji sprite with 0x0000 treated as transparent so the sprite's
+// outer padding doesn't paint a black halo over the beige note card. Callers
+// only ever need scale=1 today; the parameter is left in case a future screen
+// wants a pixel-doubled hero emoji.
+static void drawEmojiSprite(int16_t x, int16_t y, uint8_t spriteUid, uint8_t scale = 1) {
+  if (spriteUid >= EMOJI_UNIQUE_SPRITES) return;
+  const uint16_t* data = kEmojiSpriteData[spriteUid];
+  if (scale <= 1) {
+    tft.pushImage(x, y, EMOJI_SPRITE_PX, EMOJI_SPRITE_PX,
+                  const_cast<uint16_t*>(data), 0x0000);
+    return;
+  }
+  for (int py = 0; py < EMOJI_SPRITE_PX; ++py) {
+    for (int px = 0; px < EMOJI_SPRITE_PX; ++px) {
+      const uint16_t c = data[py * EMOJI_SPRITE_PX + px];
+      if (c == 0x0000) continue;
+      tft.fillRect(x + px * scale, y + py * scale, scale, scale, c);
+    }
+  }
+}
+
 static int16_t measureNoteItemWidth(const NoteBodyItem& it) {
   if (it.isEmoji) return (int16_t)(EMOJI_SPRITE_PX + 4);
   deskFontNote();
@@ -764,9 +785,16 @@ void drawWaitingForNote(const String& deskName,
 // Full-screen centered note (pixel GLCD + Twemoji). Outer frame is black; an inset
 // rounded panel is #F5F5DC (beige); body text #C4A484. Long (standard) message is
 // centered in the beige area; quick_send line is separate, below the main text,
-// for 5 minutes. Footer on black: DeskNote-{desk name} when showFooter.
+// for `kLittleTapVisibleMs`. Footer on black: DeskNote-{desk name} when showFooter.
+//
+// typingDelayMs > 0 makes text + emoji reveal progressively (like a typewriter).
+// The card, hearts, and positioning are still painted in one go first, so we
+// only inch through the body; the screen doesn't flicker between characters.
+// Pass 0 for any "redraw to update state" path (footer hide, tap timeout) so
+// those feel instantaneous.
 void drawMessageScreen(const String& mainBody, const String& deskName, bool showFooter,
-                       const String& messageType, const String& tapBody) {
+                       const String& messageType, const String& tapBody,
+                       uint8_t typingDelayMs = 0) {
   // #F5F5DC / #C4A484 — fixed RGB565 (not theme-driven).
   constexpr uint16_t kNoteBeige = 0xF7BB;
   constexpr uint16_t kNoteFg    = 0xC530;
@@ -830,14 +858,21 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
       if (it.isEmoji) {
         const int16_t ey =
             y + (int16_t)((lineHeight - (uint16_t)EMOJI_SPRITE_PX) / 2);
-        tft.pushImage(x, ey, EMOJI_SPRITE_PX, EMOJI_SPRITE_PX,
-                      const_cast<uint16_t*>(kEmojiSpriteData[it.spriteUid]));
+        drawEmojiSprite(x, ey, it.spriteUid);
         x += (int16_t)(EMOJI_SPRITE_PX + 4);
+        // Emojis land with a slightly longer beat than individual characters —
+        // feels like the sender paused to drop in a reaction.
+        if (typingDelayMs) delay((uint32_t)typingDelayMs * 2);
       } else {
         deskFontNote();
-        tft.setCursor(x, y);
-        tft.print(it.text);
-        x += tft.textWidth(it.text.c_str());
+        for (size_t c = 0; c < it.text.length(); ++c) {
+          const char ch = it.text[c];
+          tft.setCursor(x, y);
+          tft.print(ch);
+          char buf[2] = {ch, 0};
+          x += tft.textWidth(buf);
+          if (typingDelayMs) delay(typingDelayMs);
+        }
       }
       if (i + 1 < rows[r].size()) x += spaceW;
     }
@@ -848,14 +883,24 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
     tft.setTextColor(kNoteFg, kNoteBeige);
     const int16_t tapY = (int16_t)(y0 + totalMsgH + kTapGap);
     const int16_t tapW = tft.textWidth(tapBody.c_str());
+    int16_t tapX;
     if (tapY + 14 < beigeBottom && tapW <= tft.width() - 2 * xMargin) {
-      const int16_t tapX = (int16_t)((tft.width() - tapW) / 2);
-      tft.setCursor(tapX, tapY);
-      tft.print(tapBody);
+      tapX = (int16_t)((tft.width() - tapW) / 2);
     } else if (tapY + 14 < beigeBottom) {
-      // Long preset: single line, clipped from the left margin
-      tft.setCursor(xMargin, tapY);
-      tft.print(tapBody);
+      tapX = xMargin;  // long preset — clip from the left margin
+    } else {
+      tapX = -1;  // doesn't fit on screen at all
+    }
+    if (tapX >= 0) {
+      int16_t tx = tapX;
+      for (size_t c = 0; c < tapBody.length(); ++c) {
+        const char ch = tapBody[c];
+        tft.setCursor(tx, tapY);
+        tft.print(ch);
+        char buf[2] = {ch, 0};
+        tx += tft.textWidth(buf);
+        if (typingDelayMs) delay(typingDelayMs);
+      }
     }
   }
 
@@ -869,8 +914,11 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   }
 }
 
-// Single full draw — no per-character loop (that re-filled the whole screen each
-// frame and caused visible flicker on the panel).
+// Progressive "typewriter" reveal. The background card, corner framing, and
+// footer are painted once up front by drawMessageScreen; the typingDelayMs
+// then staggers each character/emoji onto the pre-painted card so nothing
+// flickers. ~20 ms/char means a full 140-char note finishes inside ~3 s.
+static constexpr uint8_t kTypingDelayMs = 20;
 static void playTypingIntro(const String& mainPart, const String& tapPart,
                             const String& deskName, bool showFooter,
                             const String& messageType) {
@@ -879,7 +927,8 @@ static void playTypingIntro(const String& mainPart, const String& tapPart,
   } else {
     gLittleTapUntilMs = 0;
   }
-  drawMessageScreen(mainPart, deskName, showFooter, messageType, tapPart);
+  drawMessageScreen(mainPart, deskName, showFooter, messageType, tapPart,
+                    kTypingDelayMs);
 }
 
 void drawErrorBox(const String& line1, const String& line2) {

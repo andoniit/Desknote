@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { sendDeskMessages } from "@/app/actions/messages";
 import type { PairedDeviceRow } from "@/lib/data/paired-devices";
 import { DESK_MESSAGE_MAX_LENGTH } from "@/lib/messages/validation";
@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Notice } from "@/components/ui/Notice";
 import { PanelHeader } from "@/components/ui/PanelHeader";
 import { Textarea, Label } from "@/components/ui/Input";
+import { EmojiPickerPanel } from "@/components/dashboard/EmojiPickerPanel";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -34,6 +35,7 @@ export function DashboardDeskComposer({
   );
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSendBoth = devices.length >= 2;
 
@@ -91,6 +93,7 @@ export function DashboardDeskComposer({
           Message
         </Label>
         <Textarea
+          ref={textareaRef}
           id="desk-message"
           value={body}
           onChange={(e) => {
@@ -107,6 +110,15 @@ export function DashboardDeskComposer({
         />
 
         <div className="mt-2 flex items-center justify-between gap-3">
+          <EmojiPickerPanel
+            textareaRef={textareaRef}
+            onInsert={(next) => {
+              setBody(next);
+              setMessageType("standard");
+            }}
+            maxLength={DESK_MESSAGE_MAX_LENGTH}
+            disabled={isPending}
+          />
           <span className="text-xs tabular-nums text-plum-200">
             {body.length}/{DESK_MESSAGE_MAX_LENGTH}
           </span>
