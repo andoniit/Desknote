@@ -104,25 +104,29 @@ export function DashboardDeskComposer({
           disabled={isPending}
           rows={4}
           className={cn(
+            "font-mdi-fallback",
             "min-h-[7.5rem] border-ash-200/60 bg-white/80 text-[16px] leading-relaxed",
             "placeholder:text-plum-200 focus:border-rose-200/80"
           )}
         />
 
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <EmojiPickerPanel
-            textareaRef={textareaRef}
-            onInsert={(next) => {
-              setBody(next);
-              setMessageType("standard");
-            }}
-            maxLength={DESK_MESSAGE_MAX_LENGTH}
-            disabled={isPending}
-          />
+        <div className="mt-1.5 flex items-center justify-between gap-3">
+          <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-plum-200">
+            Desk stickers
+          </p>
           <span className="text-xs tabular-nums text-plum-200">
             {body.length}/{DESK_MESSAGE_MAX_LENGTH}
           </span>
         </div>
+        <EmojiPickerPanel
+          textareaRef={textareaRef}
+          onInsert={(next) => {
+            setBody(next);
+            setMessageType("standard");
+          }}
+          maxLength={DESK_MESSAGE_MAX_LENGTH}
+          disabled={isPending}
+        />
 
         <div className="mt-5 space-y-3">
           <div>

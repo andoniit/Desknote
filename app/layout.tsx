@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Fraunces, Inter } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
 const inter = Inter({
@@ -13,6 +14,18 @@ const fraunces = Fraunces({
   variable: "--font-fraunces",
   display: "swap",
   axes: ["opsz"],
+});
+
+// Material Design Icons webfont — provides the Private Use Area glyphs
+// (kiss / cry / poop) the desk firmware renders as sprites. We expose it as
+// `--font-mdi` so the composer's textarea + picker can fall back to it for
+// the PUA range without affecting normal text rendering.
+const mdi = localFont({
+  src: "../node_modules/@mdi/font/fonts/materialdesignicons-webfont.woff2",
+  variable: "--font-mdi",
+  display: "swap",
+  weight: "400",
+  style: "normal",
 });
 
 const themeBackground = "#FDFAF6";
@@ -88,7 +101,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${fraunces.variable}`}
+      className={`${inter.variable} ${fraunces.variable} ${mdi.variable}`}
       suppressHydrationWarning
     >
       <body className="antialiased">{children}</body>

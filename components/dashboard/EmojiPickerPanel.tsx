@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { SUPPORTED_EMOJI } from "@/lib/emoji/supported.gen";
 import { cn } from "@/lib/utils";
 
@@ -18,10 +18,12 @@ type Props = {
 };
 
 /**
- * Grid of emoji the desk firmware can render (mirrored from kEmoji at build
- * time via scripts/gen_emoji_assets.py). We deliberately render each glyph
- * with the user's OS emoji font in the picker — it's small enough to read at
- * a glance, and the on-desk pixel-art look only happens after send.
+ * Inline sticker grid rendered directly under the composer textarea — a
+ * wrapping multi-row layout (no popover, no hidden scroll) so every glyph is
+ * visible at a glance. If the set ever outgrows two rows the container caps
+ * its height and exposes a native scrollbar so users always have an obvious
+ * affordance for "there's more below". All glyphs come from the MDI webfont
+ * (`var(--font-mdi)`) and mirror the kEmoji table the firmware can render.
  */
 export function EmojiPickerPanel({
   textareaRef,
@@ -29,11 +31,8 @@ export function EmojiPickerPanel({
   maxLength,
   disabled,
 }: Props) {
-  const [open, setOpen] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  // Dedupe once — SUPPORTED_EMOJI already is deduped by the generator, but
-  // being defensive keeps the UI stable if that ever changes.
+  // SUPPORTED_EMOJI is generated deduped, but keep the filter so future
+  // regenerations can't accidentally surface duplicates in the strip.
   const emoji = useMemo(() => {
     const seen = new Set<string>();
     return SUPPORTED_EMOJI.filter((e) => {
@@ -42,18 +41,6 @@ export function EmojiPickerPanel({
       return true;
     });
   }, []);
-
-  // Clicking outside the panel closes it. We listen on mousedown so the
-  // click that lands on an emoji tile still fires its onClick first.
-  useEffect(() => {
-    if (!open) return;
-    function onDocMouseDown(e: MouseEvent) {
-      if (!panelRef.current) return;
-      if (!panelRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [open]);
 
   function insert(ch: string) {
     const el = textareaRef.current;
@@ -76,65 +63,51 @@ export function EmojiPickerPanel({
   }
 
   return (
-    <div ref={panelRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        disabled={disabled}
-        aria-expanded={open}
-        aria-haspopup="true"
-        className={cn(
-          "inline-flex h-9 items-center gap-1.5 rounded-full border border-rose-100/70",
-          "bg-white/85 px-3 text-xs font-medium text-plum-400 shadow-sm transition-all",
-          "hover:border-rose-200 hover:bg-rose-50/60 hover:text-plum-500",
-          "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-rose-100/70",
-          "disabled:cursor-not-allowed disabled:opacity-50"
-        )}
-      >
-        <span aria-hidden="true" className="text-base leading-none">
-          😊
-        </span>
-        <span>Emoji</span>
-      </button>
-
-      {open ? (
-        <div
-          role="dialog"
-          aria-label="Pick an emoji"
-          className={cn(
-            "absolute left-0 z-20 mt-2 w-[min(20rem,calc(100vw-2rem))]",
-            "rounded-2xl border border-rose-100/70 bg-white/95 p-2 shadow-card",
-            "backdrop-blur"
-          )}
-        >
-          <div className="mb-1 flex items-center justify-between px-1">
-            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-plum-200">
-              Desk-safe emoji
-            </p>
-            <span className="text-[10px] text-plum-200">{emoji.length}</span>
-          </div>
-          <div className="scrollbar-none max-h-64 overflow-y-auto">
-            <div className="grid grid-cols-8 gap-0.5">
-              {emoji.map((e) => (
-                <button
-                  key={e.cp}
-                  type="button"
-                  title={e.cp}
-                  onClick={() => insert(e.char)}
-                  className={cn(
-                    "flex h-8 w-8 items-center justify-center rounded-lg text-lg",
-                    "transition-colors hover:bg-rose-50",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200"
-                  )}
-                >
-                  <span aria-hidden="true">{e.char}</span>
-                  <span className="sr-only">{e.cp}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
+    <div
+      role="group"
+      aria-label="Desk stickers"
+      className={cn(
+        // Two-row preview, scroll to reveal the rest. `h-[7.5rem]` ~ two tile
+        // rows including the label strip; tweak if tile sizing changes.
+        "-mx-1 flex max-h-[7.5rem] flex-wrap content-start gap-1.5 overflow-y-auto px-1 py-1",
+        // Subtle custom scrollbar so the "more below" affordance is visible
+        // without being noisy.
+        "[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-rose-200",
+        "[&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-1.5",
+        disabled && "pointer-events-none opacity-50"
+      )}
+    >
+      {emoji.map((e) => {
+        const label = e.name ?? e.cp;
+        return (
+          <button
+            key={e.cp}
+            type="button"
+            title={`${label} (${e.cp})`}
+            onClick={() => insert(e.char)}
+            disabled={disabled}
+            className={cn(
+              "group flex shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl",
+              "w-16 border border-transparent bg-rose-50/40 px-1 py-2",
+              "transition-all hover:-translate-y-0.5 hover:border-rose-200/70 hover:bg-rose-50",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200"
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "text-2xl leading-none text-plum-500",
+                e.mdi && "font-mdi"
+              )}
+            >
+              {e.char}
+            </span>
+            <span className="text-[9px] font-medium uppercase tracking-wider text-plum-300">
+              {label}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

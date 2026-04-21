@@ -35,6 +35,7 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <SPI.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -87,7 +88,12 @@ const char* kFirmwareVersion = "hello-2.1";
 // IDLE_GUARD_MS is a tiny delay between consecutive /wait calls so we don't
 // hammer the server while it's erroring (e.g. 401 after a token wipe).
 // ---------------------------------------------------------------------------
-static constexpr uint8_t  PIN_BACKLIGHT           = 21;
+// CYD ships in two backlight wirings: the original "R1" board uses GPIO 21,
+// the newer "R2" rev moved it to GPIO 27. Driving both pins HIGH at boot is
+// a safe no-op for whichever pin isn't actually wired to the LED on a given
+// unit, so the screen lights up either way.
+static constexpr uint8_t  PIN_BACKLIGHT_R1        = 21;
+static constexpr uint8_t  PIN_BACKLIGHT_R2        = 27;
 static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
 static constexpr uint32_t HTTP_TIMEOUT_MS         = 30000;
 static constexpr uint32_t IDLE_GUARD_MS           = 500;
@@ -170,6 +176,15 @@ String currentNoteId;
 /// Absolute millis deadline; quick-send line shows only while millis() < this.
 uint32_t gLittleTapUntilMs = 0;
 static constexpr uint32_t kLittleTapVisibleMs = 2UL * 60UL * 1000UL;
+
+// Server-reachable flag. Flipped to false on non-401 HTTP errors and back to
+// true on the next successful /latest call. While false we keep the last
+// rendered note on screen and paint a small "offline" strip along the bottom
+// so the desk reads as "stale" rather than broken. Declared up here (above
+// drawMessageScreen) so the renderer can consult it during its final footer
+// pass without a forward declaration.
+bool     gServerReachable = true;
+uint32_t gLastServerOkMs  = 0;
 
 /// Last "Write a message" (standard) body — kept on device so quick_send can sit below it.
 String gPersistedMainMessage;
@@ -361,157 +376,25 @@ struct EmojiUtf8 {
   const char*    rep;
 };
 
-// 3- and 4-byte UTF-8 sequences (order: check 4-byte before generic UTF-8).
+// MDI Private-Use-Area glyphs (kiss / cry / poop). The web composer inserts
+// these PUA codepoints directly via the emoji picker; the firmware matches
+// the raw UTF-8 bytes here and renders the corresponding sprite.
 static const EmojiUtf8 kEmoji[] = {
-    {3, {0xE2, 0x9D, 0xA4, 0}, "<3"},   // heart (U+2764)
-    {3, {0xE2, 0x9C, 0xA8, 0}, "*"},     // sparkles
-    {3, {0xE2, 0x98, 0xBA, 0}, ":)"},   // U+263A white smiley
-    {3, {0xE2, 0x98, 0xB9, 0}, ":("},   // U+2639
-    {3, {0xE2, 0x9C, 0x85, 0}, "[v]"},  // U+2705 check
-    {3, {0xE2, 0x9D, 0x8C, 0}, "[x]"},  // U+274C cross mark
-    {3, {0xE2, 0xAD, 0x90, 0}, "*"},    // U+2B50 star
-    {3, {0xE2, 0x9D, 0xA3, 0}, "<3"},   // U+2763 heart decoration
-    {3, {0xE2, 0x80, 0x94, 0}, "-"},    // em dash
-    {4, {0xF0, 0x9F, 0x98, 0x80}, ":D"}, // grin
-    {4, {0xF0, 0x9F, 0x98, 0x81}, ":D"},
-    {4, {0xF0, 0x9F, 0x98, 0x82}, "lol"},
-    {4, {0xF0, 0x9F, 0x98, 0x83}, ":D"},
-    {4, {0xF0, 0x9F, 0x98, 0x84}, ":D"},
-    {4, {0xF0, 0x9F, 0x98, 0x85}, ":s"},
-    {4, {0xF0, 0x9F, 0x98, 0x86}, "xD"},
-    {4, {0xF0, 0x9F, 0x98, 0x87}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0x88}, ";)"},
-    {4, {0xF0, 0x9F, 0x98, 0x89}, ";)"},
-    {4, {0xF0, 0x9F, 0x98, 0x8A}, ":)"},
-    {4, {0xF0, 0x9F, 0x98, 0x8B}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0x8C}, ":)"},
-    {4, {0xF0, 0x9F, 0x98, 0x8D}, "<3"},
-    {4, {0xF0, 0x9F, 0x98, 0x8E}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0x8F}, ":|"},
-    {4, {0xF0, 0x9F, 0x98, 0x90}, ":|"},
-    {4, {0xF0, 0x9F, 0x98, 0x91}, ":|"},
-    {4, {0xF0, 0x9F, 0x98, 0x92}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0x93}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0x94}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0x95}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0x96}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0x97}, ":*"},
-    {4, {0xF0, 0x9F, 0x98, 0x98}, ":*"},
-    {4, {0xF0, 0x9F, 0x98, 0x99}, ":*"},
-    {4, {0xF0, 0x9F, 0x98, 0x9A}, ":*"},
-    {4, {0xF0, 0x9F, 0x98, 0x9B}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0x9C}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0x9D}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0x9E}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0x9F}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA0}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA1}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA2}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA3}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA4}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA5}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA6}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA7}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA8}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xA9}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xAA}, "zzz"},
-    {4, {0xF0, 0x9F, 0x98, 0xAB}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xAC}, ":P"},
-    {4, {0xF0, 0x9F, 0x98, 0xAD}, ":'("},
-    {4, {0xF0, 0x9F, 0x98, 0xAE}, ":o"},
-    {4, {0xF0, 0x9F, 0x98, 0xAF}, ":o"},
-    {4, {0xF0, 0x9F, 0x98, 0xB0}, ":o"},
-    {4, {0xF0, 0x9F, 0x98, 0xB1}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xB2}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xB3}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xB4}, "zzz"},
-    {4, {0xF0, 0x9F, 0x98, 0xB5}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xB6}, ":|"},
-    {4, {0xF0, 0x9F, 0x98, 0xB7}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xB8}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xB9}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xBA}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xBB}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xBC}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xBD}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xBE}, ":("},
-    {4, {0xF0, 0x9F, 0x98, 0xBF}, ":("},
-    {4, {0xF0, 0x9F, 0x99, 0x82}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x83}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x84}, "roll"},
-    {4, {0xF0, 0x9F, 0x99, 0x85}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x86}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x87}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x88}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x89}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x8A}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x8B}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x8C}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x8D}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x8E}, ":)"},
-    {4, {0xF0, 0x9F, 0x99, 0x8F}, "pray"},
-    {4, {0xF0, 0x9F, 0x91, 0x8D}, "+1"},
-    {4, {0xF0, 0x9F, 0x91, 0x8E}, "-1"},
-    {4, {0xF0, 0x9F, 0x91, 0x8F}, "clap"},
-    {4, {0xF0, 0x9F, 0x91, 0x8B}, "wave"},
-    {4, {0xF0, 0x9F, 0x91, 0x8C}, "ok"},
-    {4, {0xF0, 0x9F, 0x92, 0x80}, "skull"},
-    {4, {0xF0, 0x9F, 0x92, 0x95}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x96}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x97}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x98}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x99}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x9A}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x9B}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x9C}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x9D}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x9E}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0x9F}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0xA0}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0xA1}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0xA2}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0xA3}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0xA4}, "zzz"},
-    {4, {0xF0, 0x9F, 0x92, 0xA5}, "<3"},
-    {4, {0xF0, 0x9F, 0x92, 0xA8}, "100"},
-    {4, {0xF0, 0x9F, 0x92, 0xA9}, "P"},
-    {4, {0xF0, 0x9F, 0x92, 0xAA}, "muscle"},
-    {4, {0xF0, 0x9F, 0x92, 0xAB}, "balloon"},
-    {4, {0xF0, 0x9F, 0x92, 0xAC}, "mail"},
-    {4, {0xF0, 0x9F, 0x92, 0xAF}, "100"},
-    {4, {0xF0, 0x9F, 0x93, 0xB7}, "cam"},
-    {4, {0xF0, 0x9F, 0x94, 0xA5}, "fire"},
-    {4, {0xF0, 0x9F, 0x94, 0xA4}, "book"},
-    {4, {0xF0, 0x9F, 0x91, 0xBB}, "ghost"},
-    {4, {0xF0, 0x9F, 0x95, 0xBA}, "dance"},
-    {4, {0xF0, 0x9F, 0x8E, 0x89}, "party"},
-    {4, {0xF0, 0x9F, 0x8E, 0x8A}, "party"},
-    {4, {0xF0, 0x9F, 0x8E, 0x81}, "cake"},
-    {4, {0xF0, 0x9F, 0x8D, 0x95}, "pizza"},
-    {4, {0xF0, 0x9F, 0x8D, 0xBA}, "beer"},
-    {4, {0xF0, 0x9F, 0x8D, 0xB5}, "coffee"},
-    {4, {0xF0, 0x9F, 0x8C, 0x99}, "moon"},
-    {4, {0xF0, 0x9F, 0x8C, 0x9E}, "sun"},
-    {4, {0xF0, 0x9F, 0x8C, 0x8E}, "earth"},
-    {4, {0xF0, 0x9F, 0x90, 0xB6}, "dog"},
-    {4, {0xF0, 0x9F, 0x90, 0xB1}, "cat"},
-    {4, {0xF0, 0x9F, 0xA4, 0xA3}, "lol"},
-    {4, {0xF0, 0x9F, 0xA4, 0x94}, "hmm"},
-    {4, {0xF0, 0x9F, 0xA4, 0xAF}, "boom"},
-    {4, {0xF0, 0x9F, 0xA4, 0x8D}, "<3"}, // white heart
-    {4, {0xF0, 0x9F, 0xA4, 0x8E}, "<3"}, // brown heart
-    {4, {0xF0, 0x9F, 0x96, 0xA4}, "<3"}, // black heart
-    {4, {0xF0, 0x9F, 0xAB, 0xB6}, "<3"}, // heart hands
-    {4, {0xF0, 0x9F, 0x91, 0x80}, "eyes"}, // U+1F440 EYES
-    {4, {0xF0, 0x9F, 0x91, 0x81}, "eyes"}, // U+1F441 EYE
-    {4, {0xF0, 0x9F, 0x91, 0x89}, "->"},
-    {4, {0xF0, 0x9F, 0x91, 0x88}, "<-"},
-    {4, {0xF0, 0x9F, 0x99, 0x8C}, "yay"},
-    {3, {0xE2, 0x9C, 0x8C, 0}, "V"},     // victory hand
-    {3, {0xE2, 0x99, 0xA5, 0}, "<3"},    // heart suit
-    {4, {0xF0, 0x9F, 0xA5, 0xB0}, "<3"},
-    {4, {0xF0, 0x9F, 0xA5, 0xB3}, "party"},
-    {4, {0xF0, 0x9F, 0xA5, 0xB2}, "tear"},
+    {4, {0xF3, 0xB0, 0xB1, 0xB2}, "kiss"},    // U+F0C72  mdi:emoticon-kiss
+    {4, {0xF3, 0xB0, 0xB1, 0xAD}, "cry"},     // U+F0C6D  mdi:emoticon-cry-outline
+    {4, {0xF3, 0xB0, 0x87, 0xB7}, "poop"},    // U+F01F7  mdi:emoticon-poop
+    {4, {0xF3, 0xB0, 0xB1, 0xB8}, "wink"},    // U+F0C78  mdi:emoticon-wink
+    {4, {0xF3, 0xB0, 0x87, 0xB9}, "tongue"},  // U+F01F9  mdi:emoticon-tongue
+    {4, {0xF3, 0xB0, 0xB1, 0xB4}, "neutral"}, // U+F0C74  mdi:emoticon-neutral
+    {4, {0xF3, 0xB0, 0x8B, 0x92}, "heart"},   // U+F02D2  mdi:heart-box
+    {4, {0xF3, 0xB0, 0xAF, 0xA3}, "you"},     // U+F0BE3  mdi:account-heart-outline
+    {4, {0xF3, 0xB1, 0x83, 0xB1}, "hug"},     // U+F10F1  mdi:hand-heart
+    {4, {0xF3, 0xB1, 0x88, 0x91}, "batt"},    // U+F1211  mdi:battery-heart-variant
+    {4, {0xF3, 0xB0, 0x89, 0x8A}, "flower"},  // U+F024A  mdi:flower
+    {4, {0xF3, 0xB1, 0xB1, 0xB3}, "tree"},    // U+F1C73  mdi:pine-tree-variant
+    {4, {0xF3, 0xB0, 0x96, 0x92}, "rain"},    // U+F0592  mdi:weather-hail
+    {4, {0xF3, 0xB0, 0x96, 0xA8}, "sun"},     // U+F05A8  mdi:white-balance-sunny
+    {4, {0xF3, 0xB0, 0x96, 0x9A}, "dusk"},    // U+F059A  mdi:weather-sunset
 };
 
 #include "emoji_assets.gen.h"
@@ -619,29 +502,44 @@ static inline void deskFontPairingDigits() {
   tft.setTextSize(1);
 }
 
-// Draw a Twemoji sprite with 0x0000 treated as transparent so the sprite's
-// outer padding doesn't paint a black halo over the beige note card. Callers
-// only ever need scale=1 today; the parameter is left in case a future screen
-// wants a pixel-doubled hero emoji.
-static void drawEmojiSprite(int16_t x, int16_t y, uint8_t spriteUid, uint8_t scale = 1) {
+// MDI glyphs are now stored at their native display size (40×40) so the
+// line-art detail (eyes, mouth, leaves, etc.) survives all the way to the
+// screen. Keep scale=1 so each native pixel maps 1:1 to a screen pixel —
+// upscaling by 2× turned the icons into undifferentiated blobs on the 2.8"
+// panel. measureNoteItemWidth + lineHeight below pick the display size up
+// from here, so a regen with a different SPRITE constant just works.
+static constexpr uint8_t kEmojiNoteScale = 1;
+static constexpr int16_t kEmojiNotePx    = (int16_t)EMOJI_SPRITE_PX * kEmojiNoteScale;
+
+// Draw an emoji sprite, tinting every opaque pixel to `tintColor`. MDI glyphs
+// are monochrome line-art; storing their silhouette lets the firmware repaint
+// them in the current theme's body-text color (so they always match the
+// surrounding text) and upscale them for a bigger on-desk presence.
+//
+// At native sprite size (scale=1) we touch up to 1600 pixels per glyph, so we
+// wrap the pass in startWrite/endWrite to keep CS asserted across the whole
+// sprite — without it each drawPixel does its own SPI transaction and the
+// emoji visibly "wipes in" during the typing animation.
+static void drawEmojiSprite(int16_t x, int16_t y, uint8_t spriteUid,
+                            uint16_t tintColor, uint8_t scale = kEmojiNoteScale) {
   if (spriteUid >= EMOJI_UNIQUE_SPRITES) return;
   const uint16_t* data = kEmojiSpriteData[spriteUid];
-  if (scale <= 1) {
-    tft.pushImage(x, y, EMOJI_SPRITE_PX, EMOJI_SPRITE_PX,
-                  const_cast<uint16_t*>(data), 0x0000);
-    return;
-  }
+  tft.startWrite();
   for (int py = 0; py < EMOJI_SPRITE_PX; ++py) {
     for (int px = 0; px < EMOJI_SPRITE_PX; ++px) {
-      const uint16_t c = data[py * EMOJI_SPRITE_PX + px];
-      if (c == 0x0000) continue;
-      tft.fillRect(x + px * scale, y + py * scale, scale, scale, c);
+      if (data[py * EMOJI_SPRITE_PX + px] == 0x0000) continue;
+      if (scale <= 1) {
+        tft.drawPixel(x + px, y + py, tintColor);
+      } else {
+        tft.fillRect(x + px * scale, y + py * scale, scale, scale, tintColor);
+      }
     }
   }
+  tft.endWrite();
 }
 
 static int16_t measureNoteItemWidth(const NoteBodyItem& it) {
-  if (it.isEmoji) return (int16_t)(EMOJI_SPRITE_PX + 4);
+  if (it.isEmoji) return (int16_t)(kEmojiNotePx + 4);
   deskFontNote();
   return tft.textWidth(it.text.c_str());
 }
@@ -826,7 +724,7 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   deskFontNote();
   const int16_t spaceW = tft.textWidth(" ");
   const uint16_t lhText = (uint16_t)(8 * kDeskFontScaleNote + 8);
-  const uint16_t lhEmoji = (uint16_t)(EMOJI_SPRITE_PX + 6);
+  const uint16_t lhEmoji = (uint16_t)(kEmojiNotePx + 6);
   const uint16_t lineHeight = lhText > lhEmoji ? lhText : lhEmoji;
 
   constexpr size_t kMaxNoteRows = 10;
@@ -857,9 +755,9 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
       const NoteBodyItem& it = rows[r][i];
       if (it.isEmoji) {
         const int16_t ey =
-            y + (int16_t)((lineHeight - (uint16_t)EMOJI_SPRITE_PX) / 2);
-        drawEmojiSprite(x, ey, it.spriteUid);
-        x += (int16_t)(EMOJI_SPRITE_PX + 4);
+            y + (int16_t)((lineHeight - (uint16_t)kEmojiNotePx) / 2);
+        drawEmojiSprite(x, ey, it.spriteUid, kNoteFg);
+        x += (int16_t)(kEmojiNotePx + 4);
         // Emojis land with a slightly longer beat than individual characters —
         // feels like the sender paused to drop in a reaction.
         if (typingDelayMs) delay((uint32_t)typingDelayMs * 2);
@@ -911,6 +809,25 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
     tft.setCursor(x, footerY);
     tft.print("DeskNote-");
     tft.print(deskName.length() ? deskName.c_str() : "Desk");
+  }
+
+  // Offline banner: painted last so it overlays whichever footer variant was
+  // drawn above. Two-tone (dim red on black) keeps it readable against the
+  // beige card's shadow without screaming for attention.
+  if (!gServerReachable) {
+    deskFontChromeMeta();
+    const int16_t lineH = (int16_t)(8 * kDeskFontScaleBody + 4);
+    const int16_t y = (int16_t)(tft.height() - 6 - lineH);
+    const int16_t bandTop = (int16_t)(y - 4);
+    tft.fillRect(0, bandTop, tft.width(), (int16_t)(tft.height() - bandTop),
+                 TFT_BLACK);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    const char* label = "! offline — last message shown";
+    const int16_t tw = tft.textWidth(label);
+    int16_t xT = (int16_t)((tft.width() - tw) / 2);
+    if (xT < 2) xT = 2;
+    tft.setCursor(xT, y);
+    tft.print(label);
   }
 }
 
@@ -989,6 +906,488 @@ void trySerialWifiProvision() {
   ESP.restart();
 }
 
+// ---------------------------------------------------------------------------
+// Touch input (XPT2046, dedicated SPI bus).
+//
+// The CYD-R wires the XPT2046 resistive controller on *different* pins from
+// the display: T_CLK=25, T_DIN=32, T_OUT=39, T_CS=33, T_IRQ=36. TFT_eSPI
+// can only drive one SPI bus (HSPI, used by the ILI9341), so its built-in
+// getTouch() never gets a reply and ends up reporting "no touch forever".
+//
+// To keep touch working regardless of TFT_eSPI's configuration we drive the
+// XPT2046 ourselves on a dedicated VSPI instance. The driver is tiny (a
+// handful of 12-bit ADC reads per poll) and completely self-contained.
+//
+// Calibration is a simple min/max box per axis. Defaults below match most
+// CYD-R boards in rotation=1 (landscape, USB-C port on the right); if a tap
+// lands off-target the easy fix is to edit the four `kRaw*` numbers. The
+// fields are also persisted to NVS so a future on-device calibrator can
+// overwrite them without a reflash.
+// ---------------------------------------------------------------------------
+static constexpr int PIN_TOUCH_CLK  = 25;
+static constexpr int PIN_TOUCH_MISO = 39;  // T_OUT
+static constexpr int PIN_TOUCH_MOSI = 32;  // T_DIN
+static constexpr int PIN_TOUCH_CS   = 33;
+static constexpr int PIN_TOUCH_IRQ  = 36;
+
+static SPIClass touchSpi(VSPI);
+
+struct TouchCal {
+  int16_t rawXMin;
+  int16_t rawXMax;
+  int16_t rawYMin;
+  int16_t rawYMax;
+};
+// Sensible defaults for most CYD-R units in rotation=1.
+static TouchCal gTouchCal = {260, 3800, 260, 3800};
+static bool     gTouchInit = false;
+
+static uint16_t xptReadChannel(uint8_t cmd) {
+  touchSpi.beginTransaction(SPISettings(2500000, MSBFIRST, SPI_MODE0));
+  digitalWrite(PIN_TOUCH_CS, LOW);
+  touchSpi.transfer(cmd);
+  const uint16_t hi = touchSpi.transfer(0x00);
+  const uint16_t lo = touchSpi.transfer(0x00);
+  digitalWrite(PIN_TOUCH_CS, HIGH);
+  touchSpi.endTransaction();
+  // Raw frame: 1 busy bit + 12 data bits + 3 padding zeros → shift right 3.
+  return ((hi << 8) | lo) >> 3;
+}
+
+void touchInit() {
+  if (gTouchInit) return;
+  pinMode(PIN_TOUCH_CS, OUTPUT);
+  digitalWrite(PIN_TOUCH_CS, HIGH);
+  pinMode(PIN_TOUCH_IRQ, INPUT);
+  // Pass ss=-1 so we keep full manual control of the CS line via digitalWrite;
+  // the SPI driver would otherwise claim the pin and race our toggles.
+  touchSpi.begin(PIN_TOUCH_CLK, PIN_TOUCH_MISO, PIN_TOUCH_MOSI, -1);
+
+  TouchCal c;
+  prefs.begin("desktouch", /*readOnly=*/true);
+  const size_t got = prefs.getBytes("calv2", &c, sizeof(c));
+  prefs.end();
+  if (got == sizeof(c) && c.rawXMax > c.rawXMin && c.rawYMax > c.rawYMin) {
+    gTouchCal = c;
+  }
+  gTouchInit = true;
+}
+
+// Returns true when the panel is currently being pressed and fills px/py with
+// pixel coordinates in the active screen rotation. Uses Z1/Z2 differential
+// pressure as a touch gate, then oversamples X/Y for stability.
+static bool touchReadPressed(int16_t& px, int16_t& py) {
+  if (!gTouchInit) touchInit();
+
+  // Quick pressure gate — a single Z1/Z2 diff avoids sampling 5× per idle poll.
+  {
+    const int16_t z1 = xptReadChannel(0xB1);
+    const int16_t z2 = xptReadChannel(0xC1);
+    if ((int32_t)z2 - (int32_t)z1 < 200) return false;
+  }
+
+  // Oversample X/Y with pressure re-check each sample — drop any pair taken
+  // while the finger was lifting so the reported coord isn't smeared toward
+  // the edge of the screen.
+  constexpr int kSamples = 5;
+  int32_t xSum = 0, ySum = 0;
+  int kept = 0;
+  for (int i = 0; i < kSamples; ++i) {
+    const int16_t z1 = xptReadChannel(0xB1);
+    const int16_t z2 = xptReadChannel(0xC1);
+    if ((int32_t)z2 - (int32_t)z1 < 150) continue;
+    xSum += xptReadChannel(0xD1);
+    ySum += xptReadChannel(0x91);
+    ++kept;
+  }
+  if (kept < 2) return false;
+
+  const int16_t rx = (int16_t)(xSum / kept);
+  const int16_t ry = (int16_t)(ySum / kept);
+
+  const int16_t w = tft.width();
+  const int16_t h = tft.height();
+  // CYD-R rotation=1: XPT2046 "X axis" runs top→bottom on the panel (so it
+  // drives screen Y with an inverted sweep), and "Y axis" runs left→right
+  // (driving screen X). If your board reads mirrored, swap map() endpoints.
+  int32_t sx = map(ry, gTouchCal.rawYMin, gTouchCal.rawYMax, 0, w);
+  int32_t sy = map(rx, gTouchCal.rawXMin, gTouchCal.rawXMax, h, 0);
+  sx = constrain(sx, 0, w - 1);
+  sy = constrain(sy, 0, h - 1);
+  px = (int16_t)sx;
+  py = (int16_t)sy;
+  return true;
+}
+
+// Returns true if a new tap event is available this call. Requires the finger
+// to have been lifted since the previous reported tap — prevents a single
+// long press from registering as dozens of key events.
+static uint32_t gLastTouchAtMs = 0;
+static bool     gTouchReleased = true;
+bool pollTapOnce(int16_t& outX, int16_t& outY) {
+  int16_t tx = 0, ty = 0;
+  const bool pressed = touchReadPressed(tx, ty);
+  const uint32_t now = millis();
+  if (!pressed) {
+    if (now - gLastTouchAtMs > 40) gTouchReleased = true;
+    return false;
+  }
+  if (!gTouchReleased) return false;
+  if (now - gLastTouchAtMs < 140) return false;  // debounce
+  gTouchReleased = false;
+  gLastTouchAtMs = now;
+  outX = tx;
+  outY = ty;
+  return true;
+}
+
+static bool pointInRect(int16_t px, int16_t py, int16_t x, int16_t y,
+                        int16_t w, int16_t h) {
+  return px >= x && py >= y && px < x + w && py < y + h;
+}
+
+// ---------------------------------------------------------------------------
+// On-screen Wi-Fi provisioning (touch).
+//
+// Flow:
+//   1. Scan visible APs; render a scrollable list.
+//   2. User taps an SSID → jumps to password screen.
+//   3. QWERTY keyboard edits a masked password field.
+//   4. [Connect] saves the pair to NVS ("deskwifi") and rebooting / returning
+//      `true` lets the main boot path retry WiFi.connect().
+//
+// The whole flow is self-contained and blocking — it's only entered when
+// connectWifi() has already failed, so commandeering the screen + loop is
+// fine. Serial-side JSON provisioning still works as the non-interactive
+// backup (useful for headless kiosks).
+// ---------------------------------------------------------------------------
+struct WifiApEntry {
+  String  ssid;
+  int32_t rssi;
+  bool    secured;
+};
+
+static void drawProvHeader(const char* title) {
+  tft.fillScreen(TFT_BLACK);
+  tft.fillRect(0, 0, tft.width(), 28, 0x18E3);  // subdued plum bar
+  tft.setTextColor(TFT_WHITE, 0x18E3);
+  tft.setTextSize(1);
+  tft.setCursor(10, 8);
+  tft.print(title);
+}
+
+static void drawProvButton(int16_t x, int16_t y, int16_t w, int16_t h,
+                           const char* label, uint16_t bg, uint16_t fg) {
+  tft.fillRoundRect(x, y, w, h, 4, bg);
+  tft.setTextColor(fg, bg);
+  const int16_t tw = tft.textWidth(label);
+  tft.setCursor(x + (w - tw) / 2, y + (h - 8) / 2);
+  tft.print(label);
+}
+
+static std::vector<WifiApEntry> scanVisibleAps() {
+  std::vector<WifiApEntry> out;
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  delay(100);
+  const int n = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/false);
+  for (int i = 0; i < n && (int)out.size() < 20; ++i) {
+    WifiApEntry e;
+    e.ssid    = WiFi.SSID(i);
+    e.rssi    = WiFi.RSSI(i);
+    e.secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    if (e.ssid.length() == 0) continue;
+    out.push_back(e);
+  }
+  WiFi.scanDelete();
+  return out;
+}
+
+// Returns the chosen SSID (empty String on cancel). Shows up to 6 rows at a
+// time with a [Rescan] button at the bottom. Caller blocks on this.
+static String pickApFromScan() {
+  String selected;
+  std::vector<WifiApEntry> aps;
+  bool needScan = true;
+
+  while (selected.length() == 0) {
+    if (needScan) {
+      drawProvHeader("Wi-Fi — scanning...");
+      aps = scanVisibleAps();
+      needScan = false;
+    }
+
+    drawProvHeader("Wi-Fi — tap a network");
+
+    // 4 rows of 40px leaves ~200px for the list plus room for a 40px action
+    // bar at the bottom — tall enough for a fingertip on a 2.8" panel.
+    constexpr int16_t kRowH = 40;
+    constexpr int16_t kListTop = 32;
+    const size_t kMaxRows = 4;
+    const size_t rows = aps.size() < kMaxRows ? aps.size() : kMaxRows;
+
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    for (size_t i = 0; i < rows; ++i) {
+      const int16_t y = kListTop + (int16_t)i * kRowH;
+      tft.fillRoundRect(6, y, tft.width() - 12, kRowH - 4, 6, 0x2104);
+      tft.setTextColor(TFT_WHITE, 0x2104);
+      tft.setCursor(12, y + 10);
+      String line = aps[i].ssid;
+      if (line.length() > 18) line = line.substring(0, 18);
+      tft.print(line);
+      // Right-aligned rssi + lock
+      String meta = String(aps[i].rssi) + "dBm";
+      if (aps[i].secured) meta = "* " + meta;
+      tft.setTextSize(1);
+      const int16_t tw = tft.textWidth(meta.c_str());
+      tft.setCursor(tft.width() - 12 - tw, y + 14);
+      tft.print(meta);
+      tft.setTextSize(2);
+    }
+    tft.setTextSize(1);
+
+    const int16_t actH = 36;
+    const int16_t actY = tft.height() - actH - 2;
+    drawProvButton(6, actY, 140, actH, "Rescan", 0x3A29, TFT_WHITE);
+    drawProvButton(tft.width() - 146, actY, 140, actH,
+                   "Cancel", 0x4208, TFT_WHITE);
+
+    // Wait for a tap
+    while (true) {
+      int16_t tx, ty;
+      if (!pollTapOnce(tx, ty)) {
+        delay(16);
+        continue;
+      }
+      if (pointInRect(tx, ty, 6, actY, 140, actH)) {
+        needScan = true;
+        break;
+      }
+      if (pointInRect(tx, ty, tft.width() - 146, actY, 140, actH)) {
+        return String();
+      }
+      for (size_t i = 0; i < rows; ++i) {
+        const int16_t y = kListTop + (int16_t)i * kRowH;
+        if (pointInRect(tx, ty, 6, y, tft.width() - 12, kRowH - 4)) {
+          selected = aps[i].ssid;
+          break;
+        }
+      }
+      if (selected.length()) break;
+      if (needScan) break;
+    }
+  }
+  return selected;
+}
+
+// On-screen QWERTY. Lower/upper layers via [Shift] and a [#+/] symbol layer.
+// Writes the edited value to `*outValue` and returns true on [OK], false on
+// [Back] so callers can distinguish an empty-string submit (open network)
+// from an explicit cancel.
+struct KeyCell { const char* label; int16_t x, y, w, h; char ch; };
+
+static bool runKeyboardEntry(const String& prompt, const String& initial,
+                             String* outValue) {
+  String value = initial;
+  bool shifted = false;
+  bool symbols = false;
+
+  // Tap-target sizing tuned for a 320×240 resistive panel: every cell ≥ 28px
+  // on a side so an adult fingertip can hit it reliably. Header/field take 54
+  // px, the 4 key rows take 4×34=136, and the action bar takes 36 — total 226
+  // of the 240-px height (a 14-px safe margin at the bottom).
+  constexpr int16_t kKeyboardTop = 54;
+  constexpr int16_t kKeyPitchX   = 32;
+  constexpr int16_t kKeyPitchY   = 34;
+  constexpr int16_t kKeyW        = 30;
+  constexpr int16_t kKeyH        = 30;
+
+  auto layoutForMode = [&](std::vector<KeyCell>& keys) {
+    keys.clear();
+    const char* rows_lower[4] = {
+        "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"};
+    const char* rows_upper[4] = {
+        "!@#$%^&*()", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
+    const char* rows_sym[4]   = {
+        "1234567890", "-_=+[]{}\\|", ";:'\",./?`~", "<>!@#$%&"};
+    const char* const* rows =
+        symbols ? rows_sym : (shifted ? rows_upper : rows_lower);
+
+    for (int r = 0; r < 4; ++r) {
+      const char* row = rows[r];
+      const int16_t len = (int16_t)strlen(row);
+      const int16_t totalW = len * kKeyPitchX;
+      const int16_t startX = (tft.width() - totalW) / 2;
+      for (int c = 0; c < len; ++c) {
+        KeyCell k;
+        k.label = nullptr;
+        k.x  = startX + c * kKeyPitchX;
+        k.y  = kKeyboardTop + r * kKeyPitchY;
+        k.w  = kKeyW;
+        k.h  = kKeyH;
+        k.ch = row[c];
+        keys.push_back(k);
+      }
+    }
+  };
+
+  while (true) {
+    tft.fillScreen(TFT_BLACK);
+    tft.fillRect(0, 0, tft.width(), 24, 0x18E3);
+    tft.setTextColor(TFT_WHITE, 0x18E3);
+    tft.setTextSize(1);
+    tft.setCursor(8, 8);
+    tft.print(prompt.c_str());
+
+    // Field
+    tft.fillRoundRect(8, 26, tft.width() - 16, 24, 4, 0x2104);
+    tft.setTextColor(TFT_WHITE, 0x2104);
+    tft.setCursor(12, 32);
+    tft.print(value.c_str());
+    tft.print("_");
+
+    std::vector<KeyCell> keys;
+    layoutForMode(keys);
+    for (auto& k : keys) {
+      tft.fillRoundRect(k.x, k.y, k.w, k.h, 5, 0x4208);
+      char buf[2] = {k.ch, 0};
+      tft.setTextColor(TFT_WHITE, 0x4208);
+      tft.setTextSize(2);
+      const int16_t tw = tft.textWidth(buf);
+      tft.setCursor(k.x + (k.w - tw) / 2, k.y + (k.h - 14) / 2);
+      tft.print(buf);
+      tft.setTextSize(1);
+    }
+
+    // Action row: shft, #+/, space, del, OK — all on one 36-px tall bar at
+    // the bottom of the screen. Back sits inside shft as a long-press fallback
+    // by reusing Cancel on the prior screen, so we can spend every horizontal
+    // pixel on typing targets.
+    const int16_t actH = 36;
+    const int16_t actY = tft.height() - actH - 2;
+    drawProvButton(4, actY, 50, actH,
+                   symbols ? "ABC" : (shifted ? "abc" : "Shft"),
+                   0x3A29, TFT_WHITE);
+    drawProvButton(58, actY, 44, actH, "#+/", 0x3A29, TFT_WHITE);
+    drawProvButton(106, actY, 100, actH, "space", 0x3A29, TFT_WHITE);
+    drawProvButton(210, actY, 44, actH, "del", 0x632C, TFT_WHITE);
+    drawProvButton(258, actY, 58, actH, "OK", 0x05E0, TFT_WHITE);
+    // "Back" tucked into the top-left corner over the header bar so it
+    // doesn't eat into the keyboard area.
+    drawProvButton(tft.width() - 60, 2, 56, 20, "Back", 0x632C, TFT_WHITE);
+
+    // Wait for tap
+    while (true) {
+      int16_t tx, ty;
+      if (!pollTapOnce(tx, ty)) { delay(16); continue; }
+
+      if (pointInRect(tx, ty, tft.width() - 60, 2, 56, 20))
+        return false;
+      if (pointInRect(tx, ty, 4, actY, 50, actH)) {
+        if (symbols) { symbols = false; shifted = false; }
+        else shifted = !shifted;
+        break;
+      }
+      if (pointInRect(tx, ty, 58, actY, 44, actH)) {
+        symbols = !symbols;
+        break;
+      }
+      if (pointInRect(tx, ty, 106, actY, 100, actH)) {
+        if (value.length() < 63) value += ' ';
+        break;
+      }
+      if (pointInRect(tx, ty, 210, actY, 44, actH)) {
+        if (value.length()) value.remove(value.length() - 1);
+        break;
+      }
+      if (pointInRect(tx, ty, 258, actY, 58, actH)) {
+        *outValue = value;
+        return true;
+      }
+
+      for (auto& k : keys) {
+        if (pointInRect(tx, ty, k.x, k.y, k.w, k.h)) {
+          if (value.length() < 63) value += k.ch;
+          if (shifted && !symbols) shifted = false;
+          break;
+        }
+      }
+      break;  // break inner loop to redraw
+    }
+  }
+}
+
+// Tries the provided ssid/pass and returns true on success. Blocks up to
+// WIFI_CONNECT_TIMEOUT_MS and draws a small "connecting..." indicator.
+static bool tryConnect(const String& ssid, const String& pass) {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(10, 60);
+  tft.print("Connecting to:");
+  tft.setCursor(10, 80);
+  tft.print(ssid.c_str());
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.disconnect(true, true);
+  delay(50);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  const uint32_t started = millis();
+  int dots = 0;
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - started < WIFI_CONNECT_TIMEOUT_MS) {
+    tft.fillRect(10, 110, 200, 12, TFT_BLACK);
+    tft.setCursor(10, 110);
+    for (int i = 0; i < (dots % 8) + 1; ++i) tft.print('.');
+    dots++;
+    delay(400);
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
+
+// Main entry point — keeps looping until the user gets a working connection
+// or cancels back to the error screen. Called from connectWifi() when the
+// remembered SSID/pass don't work.
+bool provisionWifiViaTouch() {
+  touchInit();
+
+  while (true) {
+    String ssid = pickApFromScan();
+    if (ssid.length() == 0) return false;  // user cancelled
+
+    String prompt = "Password for " + ssid;
+    String pass;
+    if (!runKeyboardEntry(prompt, "", &pass)) {
+      // [Back] from keyboard — drop back to the SSID list so the user can
+      // pick a different network or bail entirely.
+      continue;
+    }
+
+    if (!tryConnect(ssid, pass)) {
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.setCursor(10, 140);
+      tft.print("Connect failed — try again");
+      delay(1500);
+      continue;
+    }
+
+    // Success — persist so next boot skips this flow.
+    prefs.begin("deskwifi", /*readOnly=*/false);
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", pass);
+    prefs.end();
+
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.setCursor(10, 140);
+    tft.print("Connected! IP: ");
+    tft.print(WiFi.localIP().toString().c_str());
+    delay(1200);
+    return true;
+  }
+}
+
 bool connectWifi() {
   prefs.begin("deskwifi", /*readOnly=*/true);
   const String nvsSsid = prefs.getString("ssid", "");
@@ -1017,8 +1416,12 @@ bool connectWifi() {
   Serial.println();
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.printf("Wi-Fi failed. status=%d\n", WiFi.status());
-    drawStatus("Wi-Fi failed. Check SSID & PW.", TFT_RED);
+    Serial.printf("Wi-Fi failed (status=%d) — launching on-screen setup\n",
+                  WiFi.status());
+    drawStatus("Wi-Fi failed. Tap to set up.", TFT_RED);
+    // Fall through to touch-driven provisioning. If the user cancels we
+    // return false so the caller still sees the legacy error screen.
+    if (provisionWifiViaTouch()) return true;
     return false;
   }
 
@@ -1323,11 +1726,16 @@ void setup() {
   Serial.printf("Chip: %s, cores: %d, firmware: %s\n",
                 ESP.getChipModel(), ESP.getChipCores(), kFirmwareVersion);
 
-  pinMode(PIN_BACKLIGHT, OUTPUT);
-  digitalWrite(PIN_BACKLIGHT, HIGH);
+  // Drive both possible backlight pins HIGH so this firmware lights up on
+  // either CYD revision without us having to know which one we're on.
+  pinMode(PIN_BACKLIGHT_R1, OUTPUT);
+  digitalWrite(PIN_BACKLIGHT_R1, HIGH);
+  pinMode(PIN_BACKLIGHT_R2, OUTPUT);
+  digitalWrite(PIN_BACKLIGHT_R2, HIGH);
 
   tft.init();
   tft.setRotation(1);
+  touchInit();
 
   drawChromeHeader();
   drawStatus("Booting...");
@@ -1370,15 +1778,55 @@ void pollOnce() {
       Serial.println(F("Token rejected — wiping NVS and re-registering."));
       wipeCreds();
       ensureRegistered();
-    } else {
-      // Non-401: TLS error, timeout, 5xx, or Vercel cutting long-polls. Surface
-      // it — otherwise the status line stays stuck on "Wi-Fi OK." forever.
-      String detail = latest.httpStatus < 0
-                        ? HTTPClient::errorToString(latest.httpStatus)
-                        : ("HTTP " + String(latest.httpStatus));
-      enterError("Server error", detail);
+      return;
+    }
+
+    // Non-401: TLS error, timeout, 5xx, or the CDN cutting long-polls. Don't
+    // clobber the last rendered message — the partner still wants to read it.
+    // Flip the offline flag and re-render whatever screen we were on so the
+    // "offline" strip appears along the bottom.
+    if (gServerReachable) {
+      gServerReachable = false;
+      Serial.println(F("Entering offline mode (last message kept on screen)."));
+      if (displayState == DisplayState::ShowingMessage) {
+        drawMessageScreen(gCachedMainBody, lastPairedDeskName,
+                          !gMessageFooterHidden, gCachedMessageType,
+                          gCachedTapBody);
+      } else if (displayState == DisplayState::WaitingForNote &&
+                 lastRenderedIdleBody.length() > 0) {
+        drawMessageScreen(lastRenderedIdleBody, lastPairedDeskName,
+                          !gMessageFooterHidden, "", "");
+      } else if (displayState == DisplayState::Boot ||
+                 displayState == DisplayState::Error) {
+        // Never had a paired render to show — fall back to the legacy error
+        // screen so the user still sees what went wrong.
+        String detail = latest.httpStatus < 0
+                          ? HTTPClient::errorToString(latest.httpStatus)
+                          : ("HTTP " + String(latest.httpStatus));
+        enterError("Server unreachable", detail);
+      }
     }
     return;
+  }
+
+  // Success clears the offline banner if we were showing it.
+  if (!gServerReachable) {
+    gServerReachable = true;
+    gLastServerOkMs = millis();
+    Serial.println(F("Server reachable again — clearing offline banner."));
+    // Force a redraw so the banner disappears even if the payload below
+    // decides the state didn't change (same note id, same idle body).
+    if (displayState == DisplayState::ShowingMessage) {
+      drawMessageScreen(gCachedMainBody, lastPairedDeskName,
+                        !gMessageFooterHidden, gCachedMessageType,
+                        gCachedTapBody);
+    } else if (displayState == DisplayState::WaitingForNote &&
+               lastRenderedIdleBody.length() > 0) {
+      drawMessageScreen(lastRenderedIdleBody, lastPairedDeskName,
+                        !gMessageFooterHidden, "", "");
+    }
+  } else {
+    gLastServerOkMs = millis();
   }
 
   if (latest.unpaired) {

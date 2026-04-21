@@ -23,11 +23,14 @@ HDR = REPO / "firmware/desknote_hello/emoji_assets.gen.h"
 OUT_DEFAULT = REPO / "docs/emoji_preview.png"
 
 # Upscale each sprite to this many px per side in the preview so the pixel grid
-# is readable at screenshot size. 8 means a 20x20 sprite renders at 160x160.
-ZOOM = 8
-COLS = 12
-PAD = 4
-BG = (200, 200, 200)
+# is readable at screenshot size. With SPRITE=40 a zoom of 3 yields 120×120
+# tiles — large enough to inspect but small enough to fit a 12-col grid.
+ZOOM = 3
+COLS = 8
+PAD = 6
+# Match the desk's note-card cream background so the preview reads the same
+# way as what shows up on the device.
+BG = (245, 234, 215)
 
 
 def rgb565_to_rgb(v: int) -> tuple[int, int, int]:

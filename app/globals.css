@@ -72,4 +72,20 @@
   .scrollbar-none {
     scrollbar-width: none;
   }
+
+  /* Material Design Icons font (loaded in app/layout.tsx). Use directly on
+   * elements rendering only PUA glyphs (e.g. emoji picker tiles). For the
+   * note composer textarea, prefer .font-mdi-fallback so normal characters
+   * still use the body font and only the PUA range gets MDI as a fallback. */
+  .font-mdi {
+    font-family: var(--font-mdi), system-ui, sans-serif;
+  }
+  .font-mdi-fallback {
+    font-family:
+      var(--font-inter),
+      ui-sans-serif,
+      system-ui,
+      sans-serif,
+      var(--font-mdi);
+  }
 }

@@ -28,7 +28,7 @@ export function NoteCard({ note }: { note: Note }) {
           : "bg-white/80"
       )}
     >
-      <p className="font-serif text-xl leading-snug text-plum-500">
+      <p className="font-mdi-fallback font-serif text-xl leading-snug text-plum-500">
         {note.body}
       </p>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-plum-300">

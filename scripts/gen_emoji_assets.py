@@ -27,7 +27,7 @@ def _urlopen(url: str) -> bytes:
         return resp.read()
 
 try:
-    from PIL import Image, ImageFilter, ImageOps
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 except ImportError:
     print("Install Pillow: pip install Pillow", file=sys.stderr)
     sys.exit(1)
@@ -40,19 +40,51 @@ OUT = REPO / "firmware/desknote_hello/emoji_assets.gen.h"
 # alongside the C header so the two never drift.
 OUT_TS = REPO / "lib/emoji/supported.gen.ts"
 
-# Chunky pixel-art style: render each emoji at PIXEL_SRC native resolution,
-# posterize to flatten the palette, add a 1-px outline, then upscale 2x with
-# nearest-neighbor so each native pixel becomes a 2x2 block on the display.
-# SPRITE stays at 20 so the existing layout (line height, xMargin, frame) is
-# unchanged and the .ino needs no manual tweaks after regeneration.
-SPRITE = 20
-PIXEL_SRC = SPRITE // 2  # 10 — native pixel-art grid
+# Sprite resolution. 40 px native gives MDI line-art enough room for the
+# eyes/mouth/etc. to survive the bitmap conversion; at 20 the strokes collapse
+# into an undifferentiated blob on a 2.8" display. The firmware draws sprites
+# at scale=1 so each native pixel == one screen pixel — keep this in sync with
+# kEmojiNotePx in desknote_hello.ino if you change it.
+SPRITE = 40
+PIXEL_SRC = SPRITE // 2  # 20 — native pixel-art grid (Twemoji path only)
 OUTLINE_RGB = (24, 24, 24)  # near-black; pure black would collide with transparent
 POSTERIZE_BITS = 3  # 8 levels per channel -> retro flat palette
 
 TWEMOJI_BASE = (
     "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/{}.png"
 )
+
+# Material Design Icons webfont — used for Private Use Area glyphs (U+F0000..+
+# range) that Twemoji can't supply. The TTF is cached so we only hit the CDN
+# on the first run. "latest" pins to whatever @mdi/font currently ships; tag
+# it explicitly if reproducible builds matter more than staying current.
+MDI_TTF_URL = (
+    "https://cdn.jsdelivr.net/npm/@mdi/font@latest/fonts/materialdesignicons-webfont.ttf"
+)
+MDI_TTF_CACHE = REPO / ".cache/materialdesignicons-webfont.ttf"
+# Any cp in this range is rendered from the MDI font instead of Twemoji.
+MDI_PUA_START = 0xF0000
+MDI_PUA_END = 0xFFFFD
+
+# Friendly labels for MDI glyphs the picker exposes. Keys must stay in sync
+# with the PUA codepoints listed in firmware/desknote_hello.ino's kEmoji[].
+MDI_NAMES: dict[int, str] = {
+    0xF0C72: "kiss",
+    0xF0C6D: "cry",
+    0xF01F7: "poop",
+    0xF0C78: "wink",
+    0xF01F9: "tongue",
+    0xF0C74: "neutral",
+    0xF02D2: "heart",
+    0xF0BE3: "you",
+    0xF10F1: "hug",
+    0xF1211: "battery",
+    0xF024A: "flower",
+    0xF1C73: "tree",
+    0xF0592: "rain",
+    0xF05A8: "sun",
+    0xF059A: "dusk",
+}
 
 
 def twemoji_filename(cp: int) -> str:
@@ -134,6 +166,73 @@ def fetch_png(cp: int) -> bytes:
     return _urlopen(url)
 
 
+def ensure_mdi_ttf() -> Path:
+    """Download MDI webfont once, cache under .cache/ next to the repo."""
+    if MDI_TTF_CACHE.exists() and MDI_TTF_CACHE.stat().st_size > 100_000:
+        return MDI_TTF_CACHE
+    print("Fetching MDI webfont...", file=sys.stderr)
+    data = _urlopen(MDI_TTF_URL)
+    MDI_TTF_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    MDI_TTF_CACHE.write_bytes(data)
+    return MDI_TTF_CACHE
+
+
+def render_mdi_sprite(cp: int, size: int = SPRITE) -> list[int]:
+    """Render an MDI line-art glyph directly to a single-tone RGB565 sprite.
+
+    Goal: match what the frontend shows when it uses the MDI webfont — a
+    crisp, single-color glyph (text-plum-500) with the cream background
+    visible through any negative space. We render the glyph 4× super-sampled,
+    LANCZOS-down to 2× for AA, then NEAREST-down to native size so per-pixel
+    edges stay sharp. Alpha is thresholded into a 1-bit mask: above the
+    threshold becomes the plum fill, below stays transparent. The firmware
+    drawEmojiSprite tints opaque pixels to the active text color, which keeps
+    the glyph in lockstep with whatever theme palette is loaded.
+    """
+    SS = size * 4
+    ttf_path = str(ensure_mdi_ttf())
+    # MDI glyphs ship with ~6% padding inside the em box; nudge the font size
+    # so the actual icon nearly fills the sprite (more visible features at
+    # the cost of a tiny bit of tile padding).
+    font = ImageFont.truetype(ttf_path, int(SS * 0.95))
+    canvas = Image.new("RGBA", (SS, SS), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    ch = chr(cp)
+    bbox = draw.textbbox((0, 0), ch, font=font)
+    gw = bbox[2] - bbox[0]
+    gh = bbox[3] - bbox[1]
+    x = (SS - gw) // 2 - bbox[0]
+    y = (SS - gh) // 2 - bbox[1]
+    draw.text((x, y), ch, font=font, fill=(0, 0, 0, 255))
+
+    # 4× → 2× LANCZOS (smooth AA), 2× → 1× NEAREST (crisp pixel edges).
+    half = canvas.resize((size * 2, size * 2), Image.Resampling.LANCZOS)
+    small = half.resize((size, size), Image.Resampling.NEAREST)
+
+    # Single-tone palette: matches frontend's text-plum-500 (#4E353D ≈ RGB
+    # 78,53,61). drawEmojiSprite re-tints opaque pixels at draw time, so this
+    # value is really just a "non-zero opaque" sentinel — pick something
+    # close to the theme so previews look right.
+    FILL = (78, 53, 61)
+    fill_v = rgb565(*FILL) or 0x0841
+
+    alpha = small.split()[3]
+    out: list[int] = []
+    for yy in range(size):
+        for xx in range(size):
+            a = alpha.getpixel((xx, yy))
+            # Hard-threshold alpha so we never get half-opaque "ghost" pixels
+            # bleeding into the cream background; AA happened during the
+            # earlier LANCZOS step, the NEAREST cycle is just for the bitmap.
+            out.append(fill_v if a >= 80 else 0)
+    return out
+
+
+def fetch_glyph_png(cp: int) -> bytes:
+    """For Twemoji codepoints only — MDI takes a different code path in main()."""
+    return fetch_png(cp)
+
+
 def main() -> None:
     rows = parse_kemoji(INO)
     if not rows:
@@ -171,8 +270,10 @@ def main() -> None:
         try:
             if cp == 0x2014:
                 pix = synth_em_dash()
+            elif MDI_PUA_START <= cp <= MDI_PUA_END:
+                pix = render_mdi_sprite(cp, SPRITE)
             else:
-                png = fetch_png(cp)
+                png = fetch_glyph_png(cp)
                 pix = png_to_rgb565(png, SPRITE)
         except Exception as e:
             print(f"WARN: cp U+{cp:X} fetch failed ({e}), using replacement", file=sys.stderr)
@@ -237,7 +338,15 @@ def main() -> None:
         "// Mirrors kEmoji in firmware/desknote_hello/desknote_hello.ino so the",
         "// composer only exposes emoji the desk can actually render.",
         "",
-        "export type SupportedEmoji = { char: string; cp: string };",
+        "export type SupportedEmoji = {",
+        "  char: string;",
+        "  cp: string;",
+        "  /** Short label shown in the picker; falls back to the codepoint. */",
+        "  name?: string;",
+        "  /** True when the glyph lives in the MDI Private Use Area and",
+        "   *  needs the MDI webfont to render. */",
+        "  mdi?: boolean;",
+        "};",
         "",
         "export const SUPPORTED_EMOJI: SupportedEmoji[] = [",
     ]
@@ -247,7 +356,14 @@ def main() -> None:
         if ch in seen_chars:
             continue
         seen_chars.add(ch)
-        ts_lines.append(f"  {{ char: {json.dumps(ch)}, cp: 'U+{cp:X}' }},")
+        is_mdi = MDI_PUA_START <= cp <= MDI_PUA_END
+        name = MDI_NAMES.get(cp)
+        bits = [f"char: {json.dumps(ch)}", f"cp: 'U+{cp:X}'"]
+        if name:
+            bits.append(f"name: {json.dumps(name)}")
+        if is_mdi:
+            bits.append("mdi: true")
+        ts_lines.append("  { " + ", ".join(bits) + " },")
     ts_lines.append("];")
     ts_lines.append("")
     OUT_TS.parent.mkdir(parents=True, exist_ok=True)

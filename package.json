@@ -12,6 +12,7 @@
     "generate:icons": "node scripts/generate-pwa-icons.mjs"
   },
   "dependencies": {
+    "@mdi/font": "^7.4.47",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.103.3",
     "clsx": "^2.1.1",
