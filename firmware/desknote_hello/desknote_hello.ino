@@ -696,6 +696,9 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   // #F5F5DC / #C4A484 — fixed RGB565 (not theme-driven).
   constexpr uint16_t kNoteBeige = 0xF7BB;
   constexpr uint16_t kNoteFg    = 0xC530;
+  // MDI stickers: dark chocolate brown (readable on beige, distinct from body).
+  // RGB565 ≈ #4A3428 — not theme-driven so stickers always read as “ink brown”.
+  constexpr uint16_t kEmojiBrown = 0x49A5;
   constexpr int16_t  kFrame     = 8;
   constexpr int16_t  kPanelPad  = 10;
 
@@ -756,7 +759,7 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
       if (it.isEmoji) {
         const int16_t ey =
             y + (int16_t)((lineHeight - (uint16_t)kEmojiNotePx) / 2);
-        drawEmojiSprite(x, ey, it.spriteUid, kNoteFg);
+        drawEmojiSprite(x, ey, it.spriteUid, kEmojiBrown);
         x += (int16_t)(kEmojiNotePx + 4);
         // Emojis land with a slightly longer beat than individual characters —
         // feels like the sender paused to drop in a reaction.
