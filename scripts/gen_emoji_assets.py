@@ -84,6 +84,22 @@ MDI_NAMES: dict[int, str] = {
     0xF0592: "rain",
     0xF05A8: "sun",
     0xF059A: "dusk",
+    0xF0D08: "poppy",
+    0xF0FA1: "bee",
+    0xF0A43: "dog",
+    0xF011B: "cat",
+    0xF07C6: "elephant",
+    0xF01C1: "usd",
+    0xF03D8: "palette",
+    0xF0785: "sticker",
+    0xF0198: "cookie",
+    0xF0BAD: "1-up",
+    0xF0BC9: "alien",
+    0xF1818: "bath",
+    0xF0387: "music",
+    0xF0973: "om",
+    0xF02D1: "heart-line",
+    0xF0A1C: "vintage",
 }
 
 

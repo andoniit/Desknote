@@ -110,14 +110,6 @@ export function DashboardDeskComposer({
           )}
         />
 
-        <div className="mt-1.5 flex items-center justify-between gap-3">
-          <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-plum-200">
-            Desk stickers
-          </p>
-          <span className="text-xs tabular-nums text-plum-200">
-            {body.length}/{DESK_MESSAGE_MAX_LENGTH}
-          </span>
-        </div>
         <EmojiPickerPanel
           textareaRef={textareaRef}
           onInsert={(next) => {
@@ -125,6 +117,7 @@ export function DashboardDeskComposer({
             setMessageType("standard");
           }}
           maxLength={DESK_MESSAGE_MAX_LENGTH}
+          valueLength={body.length}
           disabled={isPending}
         />
 
