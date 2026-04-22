@@ -7,17 +7,18 @@ import { AppLink } from "@/components/ui/AppLink";
 import { Callout } from "@/components/ui/Callout";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { fetchPairedDevicesForUser } from "@/lib/data/paired-devices";
+import { attachDeviceNames, fetchMessageHistoryPage } from "@/lib/messages/history";
 import {
-  attachDeviceNames,
-  fetchMessageHistory,
-} from "@/lib/messages/history";
-import { parseMessageHistoryFilter } from "@/lib/messages/history-filters";
+  parseMessageHistoryFilter,
+  parseMessageHistoryPage,
+} from "@/lib/messages/history-filters";
 import { fetchOwnDisplayName } from "@/lib/profile/display-name";
 import {
   formatPartnerLabel,
   resolvePartnerInfo,
 } from "@/lib/relationship/partner";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 
 export const metadata = { title: "Your desk" };
@@ -25,7 +26,7 @@ export const metadata = { title: "Your desk" };
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ history?: string }>;
+  searchParams: Promise<{ history?: string; page?: string }>;
 }) {
   const supabase = createClient(await cookies());
   const {
@@ -34,8 +35,9 @@ export default async function DashboardPage({
 
   if (!user) return null;
 
-  const { history: historyParam } = await searchParams;
+  const { history: historyParam, page: pageParam } = await searchParams;
   const filter = parseMessageHistoryFilter(historyParam);
+  const requestedPage = parseMessageHistoryPage(pageParam);
 
   const partnerInfo = await resolvePartnerInfo(supabase, user.id);
   const { partnerId } = partnerInfo;
@@ -50,16 +52,26 @@ export default async function DashboardPage({
     .map((d) => d.id);
   const nameByDevice = new Map(devices.map((d) => [d.id, d.name]));
 
-  const historyEntries = attachDeviceNames(
-    await fetchMessageHistory(
-      supabase,
-      user.id,
-      pairedDeviceIds,
-      myDeskDeviceIds,
-      filter
-    ),
-    nameByDevice
+  const historyResult = await fetchMessageHistoryPage(
+    supabase,
+    user.id,
+    pairedDeviceIds,
+    myDeskDeviceIds,
+    filter,
+    requestedPage
   );
+
+  if (historyResult.totalCount > 0 && requestedPage > historyResult.pageCount) {
+    const p = new URLSearchParams();
+    if (filter !== "all") p.set("history", filter);
+    if (historyResult.pageCount > 1) {
+      p.set("page", String(historyResult.pageCount));
+    }
+    const q = p.toString();
+    redirect(q ? `/dashboard?${q}` : "/dashboard");
+  }
+
+  const historyEntries = attachDeviceNames(historyResult.entries, nameByDevice);
 
   return (
     <>
@@ -121,7 +133,14 @@ export default async function DashboardPage({
           partnerUserId={partnerId}
         />
 
-        <MessageHistorySection filter={filter} entries={historyEntries} />
+        <MessageHistorySection
+          filter={filter}
+          entries={historyEntries}
+          page={historyResult.page}
+          pageCount={historyResult.pageCount}
+          totalCount={historyResult.totalCount}
+          perPage={historyResult.perPage}
+        />
       </div>
     </>
   );

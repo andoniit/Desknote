@@ -50,9 +50,28 @@ const config: Config = {
           400: "#8C8179",
         },
       },
+      /* Emoji fallbacks on serif: Fraunces has no color emoji; without these, U+1F300+ can render as “tofu”. */
       fontFamily: {
-        sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
-        serif: ["var(--font-fraunces)", "ui-serif", "Georgia", "serif"],
+        sans: [
+          "var(--font-inter)",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+          "Apple Color Emoji",
+          "Segoe UI Emoji",
+          "Segoe UI Symbol",
+          "Noto Color Emoji",
+        ],
+        serif: [
+          "var(--font-fraunces)",
+          "ui-serif",
+          "Georgia",
+          "serif",
+          "Apple Color Emoji",
+          "Segoe UI Emoji",
+          "Segoe UI Symbol",
+          "Noto Color Emoji",
+        ],
       },
       borderRadius: {
         xl: "1rem",

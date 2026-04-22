@@ -36,7 +36,7 @@ export function MessageHistoryCard({ entry }: Props) {
             <span className="mx-1.5 text-plum-100">→</span>
             <span className="text-plum-500">{entry.device_name}</span>
           </p>
-          <p className="mt-2 font-serif text-lg leading-snug text-plum-500 sm:text-xl">
+          <p className="font-mdi-fallback font-serif text-lg leading-snug text-plum-500 sm:text-xl">
             {entry.content}
           </p>
         </div>

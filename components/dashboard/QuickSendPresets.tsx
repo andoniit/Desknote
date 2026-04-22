@@ -3,12 +3,20 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { sendDeskMessages } from "@/app/actions/messages";
 import type { PairedDeviceRow } from "@/lib/data/paired-devices";
+import { deskStickerByName } from "@/lib/emoji/desk-sticker";
 import { QUICK_SEND_PRESETS, type QuickSendTargetId } from "@/lib/messages/quick-presets";
 import { resolveQuickSendDeviceIds } from "@/lib/messages/quick-send-resolve";
 import { useDeskToast } from "@/components/providers/DeskToastProvider";
 import { Notice } from "@/components/ui/Notice";
 import { PanelHeader } from "@/components/ui/PanelHeader";
 import { cn } from "@/lib/utils";
+
+/** MDI PUA — same as “Desk stickers” / firmware (heart / hug / sun). */
+const STICKER_TARGET = {
+  mine: deskStickerByName("heart"),
+  partner: deskStickerByName("hug"),
+  both: deskStickerByName("sun"),
+} as const;
 
 type Props = {
   devices: PairedDeviceRow[];
@@ -24,34 +32,40 @@ export function QuickSendPresets(props: Props) {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  // Only show a button when the corresponding desk actually exists on the
-  // viewer's or partner's side. After unpairing your own desk, "My desk"
-  // should disappear instead of silently failing to resolve at send time.
-  const myDeskCount = devices.filter((d) => d.owner_id === viewerUserId).length;
-  const herDeskCount = partnerUserId
-    ? devices.filter((d) => d.owner_id === partnerUserId).length
-    : 0;
+  const targets = useMemo(() => {
+    const mine = devices.filter((d) => d.owner_id === viewerUserId);
+    const theirs = partnerUserId
+      ? devices.filter((d) => d.owner_id === partnerUserId)
+      : [];
 
-  const targets = useMemo(
-    () =>
-      [
-        myDeskCount > 0 && { id: "my_desk" as const, label: "My desk", short: "Mine" },
-        hasPartner &&
-          herDeskCount > 0 && {
-            id: "her_desk" as const,
-            label: "Her desk",
-            short: "Hers",
-          },
-        hasPartner &&
-          myDeskCount > 0 &&
-          herDeskCount > 0 && { id: "both" as const, label: "Both", short: "Both" },
-      ].filter(Boolean) as {
-        id: QuickSendTargetId;
-        label: string;
-        short: string;
-      }[],
-    [hasPartner, herDeskCount, myDeskCount]
-  );
+    const formatNames = (list: typeof devices) =>
+      list.map((d) => d.name).join(" & ");
+
+    const out: {
+      id: QuickSendTargetId;
+      label: string;
+      sticker: string;
+    }[] = [];
+
+    if (mine.length > 0) {
+      out.push({
+        id: "my_desk",
+        label: formatNames(mine),
+        sticker: STICKER_TARGET.mine,
+      });
+    }
+    if (hasPartner && theirs.length > 0) {
+      out.push({
+        id: "her_desk",
+        label: formatNames(theirs),
+        sticker: STICKER_TARGET.partner,
+      });
+    }
+    if (hasPartner && mine.length > 0 && theirs.length > 0) {
+      out.push({ id: "both", label: "Both", sticker: STICKER_TARGET.both });
+    }
+    return out;
+  }, [devices, hasPartner, partnerUserId, viewerUserId]);
 
   const [target, setTarget] = useState<QuickSendTargetId>(
     () => targets[0]?.id ?? "my_desk"
@@ -126,15 +140,24 @@ export function QuickSendPresets(props: Props) {
                 title={t.label}
                 onClick={() => setTarget(t.id)}
                 className={cn(
-                  "min-h-10 flex-1 rounded-2xl px-2 py-2 text-xs font-medium transition-all sm:px-3",
+                  "min-h-10 min-w-0 flex-1 rounded-2xl px-1.5 py-2 text-xs font-medium transition-all sm:px-2.5",
                   "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-rose-100/80",
                   active
                     ? "bg-plum-500 text-cream shadow-soft"
                     : "bg-white/80 text-plum-400 ring-1 ring-plum-100/60 hover:bg-blush-50/90 hover:text-plum-500"
                 )}
               >
-                <span className="sm:hidden">{t.short}</span>
-                <span className="hidden sm:inline">{t.label}</span>
+                <span className="flex min-w-0 items-center justify-center gap-1">
+                  {t.sticker ? (
+                    <span
+                      aria-hidden
+                      className="font-mdi shrink-0 text-[0.95rem] leading-none sm:text-base"
+                    >
+                      {t.sticker}
+                    </span>
+                  ) : null}
+                  <span className="min-w-0 truncate">{t.label}</span>
+                </span>
               </button>
             );
           })}
@@ -151,7 +174,7 @@ export function QuickSendPresets(props: Props) {
               disabled={isPending}
               onClick={() => sendPreset(p.text, p.id)}
               className={cn(
-                "rounded-2xl border border-rose-100/70 bg-white/90 px-3.5 py-2.5 text-left text-sm",
+                "font-mdi-fallback rounded-2xl border border-rose-100/70 bg-white/90 px-3.5 py-2.5 text-left text-sm",
                 "font-medium text-plum-500 shadow-sm transition-all active:scale-[0.98]",
                 "min-h-11 min-w-[6.5rem] flex-1 basis-[calc(50%-0.25rem)] sm:basis-auto sm:flex-initial",
                 "hover:border-rose-200 hover:bg-rose-50/50 hover:shadow-soft",

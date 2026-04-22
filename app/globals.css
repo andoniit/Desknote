@@ -81,11 +81,16 @@
     font-family: var(--font-mdi), system-ui, sans-serif;
   }
   .font-mdi-fallback {
+    /* Resolve emoji before the MDI webfont, which has no (or box) glyphs for Unicode emoji. */
     font-family:
       var(--font-inter),
       ui-sans-serif,
       system-ui,
       sans-serif,
+      "Apple Color Emoji",
+      "Segoe UI Emoji",
+      "Segoe UI Symbol",
+      "Noto Color Emoji",
       var(--font-mdi);
   }
 }
