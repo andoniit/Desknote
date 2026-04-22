@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createRouteHandlerClient } from "@/utils/supabase/route-handler";
-import { DEFAULT_AFTER_LOGIN_PATH, DEFAULT_LOGIN_PATH } from "@/lib/auth/routes";
+import {
+  DEFAULT_AFTER_LOGIN_PATH,
+  DEFAULT_LOGIN_PATH,
+  RETURNING_USER_COOKIE,
+  RETURNING_USER_COOKIE_MAX_AGE_S,
+} from "@/lib/auth/routes";
 
 /**
  * Supabase redirects here after email confirmation (PKCE `code` flow) when that flow is enabled.
@@ -33,5 +38,12 @@ export async function GET(request: Request) {
     );
   }
 
-  return NextResponse.redirect(`${origin}${next}`);
+  const res = NextResponse.redirect(`${origin}${next}`);
+  res.cookies.set(RETURNING_USER_COOKIE, "1", {
+    path: "/",
+    maxAge: RETURNING_USER_COOKIE_MAX_AGE_S,
+    sameSite: "lax",
+    httpOnly: true,
+  });
+  return res;
 }

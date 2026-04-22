@@ -19,6 +19,10 @@ export const PUBLIC_AUTH_PATH_PREFIXES = ["/auth/callback", "/auth/error"] as co
 export const DEFAULT_LOGIN_PATH = "/login";
 export const DEFAULT_AFTER_LOGIN_PATH = "/dashboard";
 
+/** Set after a successful sign-in or sign-up so the login form omits the name field on later visits. */
+export const RETURNING_USER_COOKIE = "dn_returning_login";
+export const RETURNING_USER_COOKIE_MAX_AGE_S = 60 * 60 * 24 * 400; // ~13 months, browser will trim to 400d cap
+
 export function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PATH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }

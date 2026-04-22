@@ -1,7 +1,8 @@
+import { cookies } from "next/headers";
 import { EmailPinForm } from "@/components/auth/EmailPinForm";
 import { LogoMark } from "@/components/ui/LogoMark";
 import { Notice } from "@/components/ui/Notice";
-import { DEFAULT_AFTER_LOGIN_PATH } from "@/lib/auth/routes";
+import { DEFAULT_AFTER_LOGIN_PATH, RETURNING_USER_COOKIE } from "@/lib/auth/routes";
 
 export const metadata = { title: "Sign in" };
 
@@ -19,6 +20,9 @@ export default async function LoginPage({
     next?.startsWith("/") && !next.startsWith("//")
       ? next
       : DEFAULT_AFTER_LOGIN_PATH;
+
+  const cookieStore = await cookies();
+  const askName = !cookieStore.get(RETURNING_USER_COOKIE)?.value;
 
   return (
     <div className="relative flex min-h-dvh flex-col">
@@ -42,7 +46,9 @@ export default async function LoginPage({
               Welcome back
             </h1>
             <p className="mt-2 text-center text-sm leading-relaxed text-plum-300">
-              Sign in with your email and the same six-digit PIN you chose (numbers only).
+              {askName
+                ? "New here? Add your name and a PIN, or sign in with email and the PIN you set before. Numbers only."
+                : "Sign in with your email and the same six-digit PIN you chose (numbers only)."}
             </p>
 
             {registered === "1" ? (
@@ -62,12 +68,12 @@ export default async function LoginPage({
             ) : null}
 
             <div className="mt-8">
-              <EmailPinForm defaultNext={safeNext} />
+              <EmailPinForm defaultNext={safeNext} askName={askName} />
             </div>
           </div>
 
           <p className="mt-8 text-center text-xs text-plum-200">
-            By continuing you agree to DeskNote&apos;s sign-in terms for your household.
+            By continuing, you use DeskNote with your partner for your home.
           </p>
         </div>
       </main>

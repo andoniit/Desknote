@@ -55,7 +55,7 @@ export default function HomePage() {
         <section className="mt-20 grid w-full gap-5 md:mt-28 md:grid-cols-3">
           <Feature
             title="Private by design"
-            body="Only the two of you. End-to-end account isolation on Supabase."
+            body="Only the two of you. Each home's account is separate — your notes stay between you and your partner."
           />
           <Feature
             title="ESP32 desk display"
@@ -67,8 +67,17 @@ export default function HomePage() {
           />
         </section>
 
-        <footer className="mt-24 pb-10 text-xs text-plum-200">
-          Built with care · Ready for Vercel · PWA-ready
+        <footer className="mt-24 flex flex-col items-center gap-2 pb-10 text-center text-xs text-plum-200">
+          <p>Built with care — for you two at home</p>
+          <p>
+            <Link
+              href="/privacy"
+              className="text-plum-300 underline decoration-plum-200/50 underline-offset-2 hover:text-plum-500"
+            >
+              Privacy policy
+            </Link>
+          </p>
+          <p>{"Made by Andon & Deepa <3"}</p>
         </footer>
       </main>
     </div>

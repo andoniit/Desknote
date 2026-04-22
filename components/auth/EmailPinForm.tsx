@@ -14,7 +14,13 @@ function SubmitButton() {
   );
 }
 
-export function EmailPinForm({ defaultNext }: { defaultNext: string }) {
+export function EmailPinForm({
+  defaultNext,
+  askName,
+}: {
+  defaultNext: string;
+  askName: boolean;
+}) {
   const next =
     defaultNext.startsWith("/") && !defaultNext.startsWith("//")
       ? defaultNext
@@ -37,28 +43,30 @@ export function EmailPinForm({ defaultNext }: { defaultNext: string }) {
           className="mt-1.5 text-base md:text-sm"
         />
       </div>
-      <div>
-        <Label htmlFor="display_name">
-          Your name <span className="text-plum-200">(optional)</span>
-        </Label>
-        <Input
-          id="display_name"
-          name="display_name"
-          type="text"
-          autoComplete="given-name"
-          maxLength={40}
-          placeholder="e.g. Andon"
-          className="mt-1.5 text-base md:text-sm"
-          aria-describedby="display_name_hint"
-        />
-        <p
-          id="display_name_hint"
-          className="mt-2 text-xs leading-relaxed text-plum-200"
-        >
-          New here? Add a first name so your partner sees who they&apos;re paired
-          with. You can change it any time from Settings.
-        </p>
-      </div>
+      {askName ? (
+        <div>
+          <Label htmlFor="display_name">
+            Your name <span className="text-plum-200">(optional)</span>
+          </Label>
+          <Input
+            id="display_name"
+            name="display_name"
+            type="text"
+            autoComplete="given-name"
+            maxLength={40}
+            placeholder="e.g. Andon"
+            className="mt-1.5 text-base md:text-sm"
+            aria-describedby="display_name_hint"
+          />
+          <p
+            id="display_name_hint"
+            className="mt-2 text-xs leading-relaxed text-plum-200"
+          >
+            New here? Add a first name so your partner sees who they&apos;re paired
+            with. You can change it any time from Settings.
+          </p>
+        </div>
+      ) : null}
       <div>
         <Label htmlFor="pin">Six-digit PIN</Label>
         <Input
@@ -76,13 +84,14 @@ export function EmailPinForm({ defaultNext }: { defaultNext: string }) {
           aria-describedby="pin_hint"
         />
         <p id="pin_hint" className="mt-2 text-xs leading-relaxed text-plum-200">
-          New here? Enter the email you want and choose a PIN — we&apos;ll create your account.
-          Returning? Same email and the PIN you set before.
+          {askName
+            ? "New here? Enter the email you want and choose a PIN — we&apos;ll create your account. Returning? Same email and the PIN you set before."
+            : "Enter the same email and the six-digit PIN you use for DeskNote."}
         </p>
       </div>
       <SubmitButton />
       <p className="text-center text-xs leading-relaxed text-plum-300">
-        Your PIN is stored like a password (encrypted by Supabase). Only use digits 0–9.
+        Your PIN is protected the same way a password is. Only use digits 0–9.
       </p>
     </form>
   );

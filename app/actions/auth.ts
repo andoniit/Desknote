@@ -5,7 +5,11 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
 import { getSiteUrl } from "@/lib/auth/site-url";
-import { DEFAULT_LOGIN_PATH } from "@/lib/auth/routes";
+import {
+  DEFAULT_LOGIN_PATH,
+  RETURNING_USER_COOKIE,
+  RETURNING_USER_COOKIE_MAX_AGE_S,
+} from "@/lib/auth/routes";
 import { normalizePinInput, validateSixDigitPin } from "@/lib/auth/pin";
 import {
   fetchOwnDisplayName,
@@ -16,6 +20,16 @@ import {
 function loginUrl(params: Record<string, string>) {
   const q = new URLSearchParams(params);
   return `${DEFAULT_LOGIN_PATH}?${q.toString()}`;
+}
+
+async function setReturningUserCookie() {
+  const store = await cookies();
+  store.set(RETURNING_USER_COOKIE, "1", {
+    path: "/",
+    maxAge: RETURNING_USER_COOKIE_MAX_AGE_S,
+    sameSite: "lax",
+    httpOnly: true,
+  });
 }
 
 /**
@@ -67,6 +81,7 @@ export async function signInOrSignUpWithEmailPin(formData: FormData) {
         }
       }
     }
+    await setReturningUserCookie();
     revalidatePath("/", "layout");
     redirect(next);
   }
@@ -79,7 +94,7 @@ export async function signInOrSignUpWithEmailPin(formData: FormData) {
     redirect(
       loginUrl({
         error: encodeURIComponent(
-          "Confirm your email first (check the link Supabase sent), then sign in with your PIN."
+          "Confirm your email first (use the link we sent you), then sign in with your PIN."
         ),
       })
     );
@@ -112,6 +127,7 @@ export async function signInOrSignUpWithEmailPin(formData: FormData) {
     if (displayName && signUpData.user?.id) {
       await upsertOwnDisplayName(supabase, signUpData.user.id, displayName);
     }
+    await setReturningUserCookie();
     revalidatePath("/", "layout");
     redirect(next);
   }
