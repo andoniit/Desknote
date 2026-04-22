@@ -39,6 +39,7 @@
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <stdlib.h>
 #include <string.h>
 #include <vector>
 
@@ -527,6 +528,10 @@ static inline void deskFontPairingDigits() {
 static constexpr uint8_t kEmojiNoteScale = 1;
 static constexpr int16_t kEmojiNotePx    = (int16_t)EMOJI_SPRITE_PX * kEmojiNoteScale;
 
+// TFT_eSPI has no public getStartCount(); track sketch-driven startWrite/endWrite
+// nesting so touchReadPressed can bail while a batched TFT pass is active.
+static uint8_t gTftSketchWriteDepth = 0;
+
 // Draw an emoji sprite, tinting every opaque pixel to `tintColor`. MDI glyphs
 // are monochrome line-art; storing their silhouette lets the firmware repaint
 // them in the current theme's body-text color (so they always match the
@@ -540,6 +545,7 @@ static void drawEmojiSprite(int16_t x, int16_t y, uint8_t spriteUid,
                             uint16_t tintColor, uint8_t scale = kEmojiNoteScale) {
   if (spriteUid >= EMOJI_UNIQUE_SPRITES) return;
   const uint16_t* data = kEmojiSpriteData[spriteUid];
+  ++gTftSketchWriteDepth;
   tft.startWrite();
   for (int py = 0; py < EMOJI_SPRITE_PX; ++py) {
     for (int px = 0; px < EMOJI_SPRITE_PX; ++px) {
@@ -552,6 +558,7 @@ static void drawEmojiSprite(int16_t x, int16_t y, uint8_t spriteUid,
     }
   }
   tft.endWrite();
+  --gTftSketchWriteDepth;
 }
 
 static int16_t measureNoteItemWidth(const NoteBodyItem& it) {
@@ -940,8 +947,7 @@ void trySerialWifiProvision() {
 // Calibration is a simple min/max box per axis. Defaults below match most
 // CYD-R boards in rotation=1 (landscape, USB-C port on the right); if a tap
 // lands off-target the easy fix is to edit the four `kRaw*` numbers. The
-// fields are also persisted to NVS so a future on-device calibrator can
-// overwrite them without a reflash.
+// fields are persisted under NVS namespace "desktouch", key "calv3".
 // ---------------------------------------------------------------------------
 static constexpr int PIN_TOUCH_CLK  = 25;
 static constexpr int PIN_TOUCH_MISO = 39;  // T_OUT
@@ -951,6 +957,9 @@ static constexpr int PIN_TOUCH_IRQ  = 36;
 
 static SPIClass touchSpi(VSPI);
 
+// Stored in NVS as calv3. raw* = 12-bit XPT2046 values: rx from the 0xD1
+// sequence (Paul "x"), ry from the 0x91 sequence (Paul "y") — each range maps
+// to the same-named screen axis (no crossing).
 struct TouchCal {
   int16_t rawXMin;
   int16_t rawXMax;
@@ -958,19 +967,74 @@ struct TouchCal {
   int16_t rawYMax;
 };
 // Sensible defaults for most CYD-R units in rotation=1.
-static TouchCal gTouchCal = {260, 3800, 260, 3800};
+static TouchCal gTouchCal = {200, 3900, 200, 3900};
 static bool     gTouchInit = false;
 
-static uint16_t xptReadChannel(uint8_t cmd) {
-  touchSpi.beginTransaction(SPISettings(2500000, MSBFIRST, SPI_MODE0));
+// XPT2046 wants a modest SPI clock; 2 MHz matches Paul Stoffregen's
+// XPT2046_Touchscreen library (common CYD baseline).
+static constexpr uint32_t kTouchSpiHz = 2000000;
+static const SPISettings kTouchSpiSettings(kTouchSpiHz, MSBFIRST, SPI_MODE0);
+
+// MIT-licensed reference: XPT2046_Touchscreen.cpp — pick the median-quality
+// sample from three ADC readings (rejects one noisy conversion).
+static int16_t xptBestTwoAvg(int16_t a, int16_t b, int16_t c) {
+  int16_t da = (a > b) ? (a - b) : (b - a);
+  int16_t db = (a > c) ? (a - c) : (c - a);
+  int16_t dc = (c > b) ? (c - b) : (b - c);
+  if (da <= db && da <= dc) return (int16_t)(((int32_t)a + (int32_t)b) >> 1);
+  if (db <= da && db <= dc) return (int16_t)(((int32_t)a + (int32_t)c) >> 1);
+  return (int16_t)(((int32_t)b + (int32_t)c) >> 1);
+}
+
+// One CS assertion, pipelined commands — required for correct pressure + XY on
+// XPT2046 (standalone Z1 then Z2 transactions do not match the chip's ADC
+// sequencing; |Z2−Z1| stays near zero even when the panel is pressed).
+static bool xptReadRawPaul(int16_t& rx, int16_t& ry, int32_t& zOut,
+                           int16_t* dbgZ1 = nullptr, int16_t* dbgZ2Plate = nullptr) {
+  int16_t data[6];
+  int32_t z;
+
+  touchSpi.beginTransaction(kTouchSpiSettings);
   digitalWrite(PIN_TOUCH_CS, LOW);
-  touchSpi.transfer(cmd);
-  const uint16_t hi = touchSpi.transfer(0x00);
-  const uint16_t lo = touchSpi.transfer(0x00);
+  delayMicroseconds(1);
+
+  touchSpi.transfer(0xB1);  // Z1 measure
+  const int16_t z1 = (int16_t)(touchSpi.transfer16(0xC1) >> 3);  // Z1 result, issue Z2
+  if (dbgZ1) *dbgZ1 = z1;
+  z = (int32_t)z1 + 4095;
+  const int16_t z2p = (int16_t)(touchSpi.transfer16(0x91) >> 3);  // Z2 result, issue X
+  if (dbgZ2Plate) *dbgZ2Plate = z2p;
+  z -= (int32_t)z2p;
+
+  constexpr int32_t kPressureThreshold = 200;  // Paul's default is 300; lower = lighter taps
+  if (z < kPressureThreshold) {
+    // Same tail as XPT2046_Touchscreen when not pressed: park controller + clock
+    // out last conversions so the next CS session starts clean.
+    (void)touchSpi.transfer16(0xD0);
+    (void)touchSpi.transfer16(0);
+    digitalWrite(PIN_TOUCH_CS, HIGH);
+    touchSpi.endTransaction();
+    zOut = z;
+    rx = ry = 0;
+    return false;
+  }
+
+  touchSpi.transfer16(0x91);  // dummy X — first conversion after press is noisy
+  data[0] = (int16_t)(touchSpi.transfer16(0xD1) >> 3);
+  data[1] = (int16_t)(touchSpi.transfer16(0x91) >> 3);
+  data[2] = (int16_t)(touchSpi.transfer16(0xD1) >> 3);
+  data[3] = (int16_t)(touchSpi.transfer16(0x91) >> 3);
+  data[4] = (int16_t)(touchSpi.transfer16(0xD0) >> 3);
+  data[5] = (int16_t)(touchSpi.transfer16(0) >> 3);
+
   digitalWrite(PIN_TOUCH_CS, HIGH);
   touchSpi.endTransaction();
-  // Raw frame: 1 busy bit + 12 data bits + 3 padding zeros → shift right 3.
-  return ((hi << 8) | lo) >> 3;
+
+  if (z < 0) z = 0;
+  zOut = z;
+  rx = xptBestTwoAvg(data[0], data[2], data[4]);
+  ry = xptBestTwoAvg(data[1], data[3], data[5]);
+  return true;
 }
 
 void touchInit() {
@@ -984,7 +1048,8 @@ void touchInit() {
 
   TouchCal c;
   prefs.begin("desktouch", /*readOnly=*/true);
-  const size_t got = prefs.getBytes("calv2", &c, sizeof(c));
+  // calv2 crossed rx/ry vs screen axes; ignore it so old saves don't mis-map.
+  const size_t got = prefs.getBytes("calv3", &c, sizeof(c));
   prefs.end();
   if (got == sizeof(c) && c.rawXMax > c.rawXMin && c.rawYMax > c.rawYMin) {
     gTouchCal = c;
@@ -993,44 +1058,30 @@ void touchInit() {
 }
 
 // Returns true when the panel is currently being pressed and fills px/py with
-// pixel coordinates in the active screen rotation. Uses Z1/Z2 differential
-// pressure as a touch gate, then oversamples X/Y for stability.
+// pixel coordinates in the active screen rotation. Uses the pipelined
+// pressure estimate from XPT2046_Touchscreen (z = z1 + 4095 − first X sample),
+// then triple-sampled X/Y with median-of-pair averaging.
 static bool touchReadPressed(int16_t& px, int16_t& py) {
+  // TFT_eSPI has no public getStartCount(); gTftSketchWriteDepth mirrors this
+  // sketch's startWrite/endWrite nesting. Skip all touch SPI while non-zero.
+  if (gTftSketchWriteDepth != 0) return false;
   if (!gTouchInit) touchInit();
 
-  // Quick pressure gate — a single Z1/Z2 diff avoids sampling 5× per idle poll.
-  {
-    const int16_t z1 = xptReadChannel(0xB1);
-    const int16_t z2 = xptReadChannel(0xC1);
-    if ((int32_t)z2 - (int32_t)z1 < 200) return false;
-  }
-
-  // Oversample X/Y with pressure re-check each sample — drop any pair taken
-  // while the finger was lifting so the reported coord isn't smeared toward
-  // the edge of the screen.
-  constexpr int kSamples = 5;
-  int32_t xSum = 0, ySum = 0;
-  int kept = 0;
-  for (int i = 0; i < kSamples; ++i) {
-    const int16_t z1 = xptReadChannel(0xB1);
-    const int16_t z2 = xptReadChannel(0xC1);
-    if ((int32_t)z2 - (int32_t)z1 < 150) continue;
-    xSum += xptReadChannel(0xD1);
-    ySum += xptReadChannel(0x91);
-    ++kept;
-  }
-  if (kept < 2) return false;
-
-  const int16_t rx = (int16_t)(xSum / kept);
-  const int16_t ry = (int16_t)(ySum / kept);
+  int16_t rx = 0, ry = 0;
+  int32_t zScratch = 0;
+  if (!xptReadRawPaul(rx, ry, zScratch)) return false;
 
   const int16_t w = tft.width();
   const int16_t h = tft.height();
-  // CYD-R rotation=1: XPT2046 "X axis" runs top→bottom on the panel (so it
-  // drives screen Y with an inverted sweep), and "Y axis" runs left→right
-  // (driving screen X). If your board reads mirrored, swap map() endpoints.
-  int32_t sx = map(ry, gTouchCal.rawYMin, gTouchCal.rawYMax, 0, w);
-  int32_t sy = map(rx, gTouchCal.rawXMin, gTouchCal.rawXMax, h, 0);
+  // rx / ry come from xptReadRawPaul (same ordering as XPT2046_Touchscreen
+  // rotation 1). Map each raw axis to the same screen axis — the old build
+  // crossed ry→X and rx→Y, which mis-aligned keys after the pipelined driver
+  // returned true Paul-order coordinates. If Y is upside-down, swap rawYMin
+  // and rawYMax in NVS (or flip the second map below).
+  int32_t sx = map((long)rx, (long)gTouchCal.rawXMin, (long)gTouchCal.rawXMax,
+                   0L, (long)(w - 1));
+  int32_t sy = map((long)ry, (long)gTouchCal.rawYMin, (long)gTouchCal.rawYMax,
+                   0L, (long)(h - 1));
   sx = constrain(sx, 0, w - 1);
   sy = constrain(sy, 0, h - 1);
   px = (int16_t)sx;
@@ -1301,38 +1352,42 @@ static bool runKeyboardEntry(const String& prompt, const String& initial,
       int16_t tx, ty;
       if (!pollTapOnce(tx, ty)) { delay(16); continue; }
 
-      if (pointInRect(tx, ty, tft.width() - 60, 2, 56, 20))
-        return false;
+      if (pointInRect(tx, ty, tft.width() - 60, 2, 56, 20)) return false;
+
+      bool handled = false;
+
       if (pointInRect(tx, ty, 4, actY, 50, actH)) {
-        if (symbols) { symbols = false; shifted = false; }
-        else shifted = !shifted;
-        break;
-      }
-      if (pointInRect(tx, ty, 58, actY, 44, actH)) {
+        if (symbols) {
+          symbols = false;
+          shifted = false;
+        } else
+          shifted = !shifted;
+        handled = true;
+      } else if (pointInRect(tx, ty, 58, actY, 44, actH)) {
         symbols = !symbols;
-        break;
-      }
-      if (pointInRect(tx, ty, 106, actY, 100, actH)) {
+        handled = true;
+      } else if (pointInRect(tx, ty, 106, actY, 100, actH)) {
         if (value.length() < 63) value += ' ';
-        break;
-      }
-      if (pointInRect(tx, ty, 210, actY, 44, actH)) {
+        handled = true;
+      } else if (pointInRect(tx, ty, 210, actY, 44, actH)) {
         if (value.length()) value.remove(value.length() - 1);
-        break;
-      }
-      if (pointInRect(tx, ty, 258, actY, 58, actH)) {
+        handled = true;
+      } else if (pointInRect(tx, ty, 258, actY, 58, actH)) {
         *outValue = value;
         return true;
-      }
-
-      for (auto& k : keys) {
-        if (pointInRect(tx, ty, k.x, k.y, k.w, k.h)) {
-          if (value.length() < 63) value += k.ch;
-          if (shifted && !symbols) shifted = false;
-          break;
+      } else {
+        for (auto& k : keys) {
+          if (pointInRect(tx, ty, k.x, k.y, k.w, k.h)) {
+            if (value.length() < 63) value += k.ch;
+            if (shifted && !symbols) shifted = false;
+            handled = true;
+            break;
+          }
         }
       }
-      break;  // break inner loop to redraw
+
+      if (handled) break;
+      delay(16);
     }
   }
 }
@@ -1930,6 +1985,22 @@ void loop() {
                lastRenderedIdleBody.length() > 0) {
       gMessageFooterHidden = true;
       drawMessageScreen(lastRenderedIdleBody, lastPairedDeskName, false, "", "");
+    }
+  }
+
+  // Temporary XPT2046 raw logger (remove after verifying Z / XY on Serial).
+  // Temporary: one pipelined read per loop — z1/z2 are the first two plate
+  // samples; paul_z matches XPT2046_Touchscreen pressure; rx/ry are valid when
+  // paul_z crosses the press threshold.
+  if (gTouchInit && gTftSketchWriteDepth == 0) {
+    int16_t z1d = 0, z2d = 0, rx = 0, ry = 0;
+    int32_t paulZ = 0;
+    const bool pressed = xptReadRawPaul(rx, ry, paulZ, &z1d, &z2d);
+    const int32_t diff = (int32_t)z2d - (int32_t)z1d;
+    if (labs((long)diff) > 30 || pressed) {
+      Serial.printf(
+          "touch raw: z1=%d z2=%d diff=%ld paul_z=%ld rx=%d ry=%d\n", z1d, z2d,
+          (long)diff, (long)paulZ, (int)rx, (int)ry);
     }
   }
 
