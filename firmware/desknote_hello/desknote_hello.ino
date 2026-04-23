@@ -703,8 +703,8 @@ void drawWaitingForNote(const String& deskName,
   tft.print(sub);
 }
 
-// Full-screen centered note (pixel GLCD + Twemoji). Outer frame is black; an inset
-// rounded panel is #F5F5DC (beige); body text #C4A484. Long (standard) message is
+// Full-screen centered note (pixel GLCD + MDI sprites). Outer frame is black; an inset
+// rounded panel is #F5F5DC (beige); body text a darker brown. Long (standard) message is
 // centered in the beige area; quick_send line is separate, below the main text,
 // for `kLittleTapVisibleMs`. Footer on black: DeskNote-{desk name} when showFooter.
 //
@@ -716,12 +716,14 @@ void drawWaitingForNote(const String& deskName,
 void drawMessageScreen(const String& mainBody, const String& deskName, bool showFooter,
                        const String& messageType, const String& tapBody,
                        uint8_t typingDelayMs = 0) {
-  // #F5F5DC / #C4A484 — fixed RGB565 (not theme-driven).
-  constexpr uint16_t kNoteBeige = 0xF7BB;
-  constexpr uint16_t kNoteFg    = 0xC530;
-  // MDI stickers: dark chocolate brown (readable on beige, distinct from body).
-  // RGB565 ≈ #4A3428 — not theme-driven so stickers always read as “ink brown”.
-  constexpr uint16_t kEmojiBrown = 0x49A5;
+  // #F5F5DC (beige) + darker warm browns for text (fixed RGB565, not theme-driven).
+  constexpr uint16_t kNoteBeige     = 0xF7BB;
+  // ~#6B4A2E — was 0xC530; deeper brown reads clearer on the cream panel.
+  constexpr uint16_t kNoteFg        = 0x7B0C;
+  // Lighter brown for the black footer strip (same hue family, more contrast on black).
+  constexpr uint16_t kNoteFgFooter  = 0xCD2C;
+  // MDI stickers: deep chocolate brown (a touch darker than old 0x49A5 for contrast on beige).
+  constexpr uint16_t kEmojiBrown   = 0x3A26;
   constexpr int16_t  kFrame     = 8;
   constexpr int16_t  kPanelPad  = 10;
 
@@ -748,9 +750,10 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   collectWrappedNoteRows(items, xMargin, rows);
 
   deskFontNote();
-  const int16_t spaceW = tft.textWidth(" ");
-  const uint16_t lhText = (uint16_t)(8 * kDeskFontScaleNote + 8);
-  const uint16_t lhEmoji = (uint16_t)(kEmojiNotePx + 6);
+  const int16_t spaceW     = tft.textWidth(" ");
+  const int16_t kTextLinePx = (int16_t)(8 * kDeskFontScaleNote);
+  const uint16_t lhText     = (uint16_t)(kTextLinePx + 8);
+  const uint16_t lhEmoji    = (uint16_t)(kEmojiNotePx + 6);
   const uint16_t lineHeight = lhText > lhEmoji ? lhText : lhEmoji;
 
   constexpr size_t kMaxNoteRows = 10;
@@ -774,15 +777,19 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
       rw += measureNoteItemWidth(rows[r][j]);
     }
     int16_t x = (int16_t)((tft.width() - rw) / 2);
+    // Row top `y` — align both GLCD text and emoji to one horizontal band: center each
+    // in the line (previously only emoji was centered, so text sat high vs stickers).
     int16_t y = (int16_t)(y0 + (int32_t)r * (int32_t)lineHeight);
+    const int16_t yText =
+        y + (int16_t)((lineHeight - kTextLinePx) / 2);
+    const int16_t yEmojiBase =
+        y + (int16_t)((lineHeight - (int16_t)kEmojiNotePx) / 2);
 
     tft.setTextColor(kNoteFg, kNoteBeige);
     for (size_t i = 0; i < rows[r].size(); ++i) {
       const NoteBodyItem& it = rows[r][i];
       if (it.isEmoji) {
-        const int16_t ey =
-            y + (int16_t)((lineHeight - (uint16_t)kEmojiNotePx) / 2);
-        drawEmojiSprite(x, ey, it.spriteUid, kEmojiBrown);
+        drawEmojiSprite(x, yEmojiBase, it.spriteUid, kEmojiBrown);
         x += (int16_t)(kEmojiNotePx + 4);
         // Emojis land with a slightly longer beat than individual characters —
         // feels like the sender paused to drop in a reaction.
@@ -791,7 +798,7 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
         deskFontNote();
         for (size_t c = 0; c < it.text.length(); ++c) {
           const char ch = it.text[c];
-          tft.setCursor(x, y);
+          tft.setCursor(x, yText);
           tft.print(ch);
           char buf[2] = {ch, 0};
           x += tft.textWidth(buf);
@@ -831,7 +838,7 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   if (showFooter) {
     deskFontChromeMeta();
     int16_t x = xMargin;
-    tft.setTextColor(kNoteFg, TFT_BLACK);
+    tft.setTextColor(kNoteFgFooter, TFT_BLACK);
     tft.setCursor(x, footerY);
     tft.print("DeskNote-");
     tft.print(deskName.length() ? deskName.c_str() : "Desk");
