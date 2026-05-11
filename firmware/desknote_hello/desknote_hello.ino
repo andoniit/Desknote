@@ -73,7 +73,7 @@ const char* WIFI_PASSWORD = "DEEPAANI123";
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://www.desknote.space";
 const char* kDeviceApiKey    = "5c27a1577e9b48d618f4653957e00996efee71c3752afa4d";
-const char* kFirmwareVersion = "hello-2.1";
+const char* kFirmwareVersion = "hello-2.2";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -510,6 +510,10 @@ static inline void deskFontNote() {
   tft.setTextFont(1);
   tft.setTextSize(kDeskFontScaleNote);
 }
+static inline void deskFontNoteScaled(uint8_t scale) {
+  tft.setTextFont(1);
+  tft.setTextSize(scale);
+}
 static inline void deskFontLittleTap() {
   tft.setTextFont(1);
   tft.setTextSize(1);
@@ -519,14 +523,10 @@ static inline void deskFontPairingDigits() {
   tft.setTextSize(1);
 }
 
-// MDI glyphs are now stored at their native display size (40×40) so the
-// line-art detail (eyes, mouth, leaves, etc.) survives all the way to the
-// screen. Keep scale=1 so each native pixel maps 1:1 to a screen pixel —
-// upscaling by 2× turned the icons into undifferentiated blobs on the 2.8"
-// panel. measureNoteItemWidth + lineHeight below pick the display size up
-// from here, so a regen with a different SPRITE constant just works.
+// MDI glyphs are stored at native EMOJI_SPRITE_P×EMOJI_SPRITE_P (see emoji_assets.gen.h).
+// On the note card we draw them 1:1 at full size when text is large, or downsampled
+// (drawEmojiSpriteSized) when text shrinks so stickers stay proportional to the font.
 static constexpr uint8_t kEmojiNoteScale = 1;
-static constexpr int16_t kEmojiNotePx    = (int16_t)EMOJI_SPRITE_PX * kEmojiNoteScale;
 
 // TFT_eSPI has no public getStartCount(); track sketch-driven startWrite/endWrite
 // nesting so touchReadPressed can bail while a batched TFT pass is active.
@@ -561,18 +561,60 @@ static void drawEmojiSprite(int16_t x, int16_t y, uint8_t spriteUid,
   --gTftSketchWriteDepth;
 }
 
-static int16_t measureNoteItemWidth(const NoteBodyItem& it) {
-  if (it.isEmoji) return (int16_t)(kEmojiNotePx + 4);
-  deskFontNote();
+// On-screen emoji width for a given GLCD text scale (sprite is downsampled when smaller).
+static int16_t emojiLayoutPxForTextScale(uint8_t textScale) {
+  if (textScale >= 3) return (int16_t)EMOJI_SPRITE_PX;
+  if (textScale == 2) return (int16_t)((EMOJI_SPRITE_PX * 2 + 1) / 3);
+  return (int16_t)(EMOJI_SPRITE_PX / 2);
+}
+
+// Draw MDI sprite scaled to outPx×outPx (nearest-neighbor). outPx >= EMOJI_SPRITE_PX uses
+// the fast 1:1 path in drawEmojiSprite.
+static void drawEmojiSpriteSized(int16_t x, int16_t y, uint8_t spriteUid, uint16_t tintColor,
+                                 int16_t outPx) {
+  if (spriteUid >= EMOJI_UNIQUE_SPRITES || outPx < 1) return;
+  if (outPx >= EMOJI_SPRITE_PX) {
+    drawEmojiSprite(x, y, spriteUid, tintColor, 1);
+    return;
+  }
+  const uint16_t* data = kEmojiSpriteData[spriteUid];
+  ++gTftSketchWriteDepth;
+  tft.startWrite();
+  for (int oy = 0; oy < outPx; ++oy) {
+    const int spy = oy * EMOJI_SPRITE_PX / outPx;
+    for (int ox = 0; ox < outPx; ++ox) {
+      const int spx = ox * EMOJI_SPRITE_PX / outPx;
+      if (data[spy * EMOJI_SPRITE_PX + spx] != 0x0000) tft.drawPixel(x + ox, y + oy, tintColor);
+    }
+  }
+  tft.endWrite();
+  --gTftSketchWriteDepth;
+}
+
+static int16_t measureNoteItemWidth(const NoteBodyItem& it, uint8_t textScale,
+                                    int16_t emojiOutPx) {
+  if (it.isEmoji) return (int16_t)(emojiOutPx + 4);
+  deskFontNoteScaled(textScale);
   return tft.textWidth(it.text.c_str());
+}
+
+static uint16_t noteLineHeightForLayout(uint8_t textScale, int16_t emojiOutPx,
+                                        bool tightTextPad) {
+  const int16_t  kTextLinePx = (int16_t)(8 * textScale);
+  const uint16_t textPad     = tightTextPad ? 4u : 8u;
+  const uint16_t lhText      = (uint16_t)(kTextLinePx + textPad);
+  const uint16_t lhEmoji     = (uint16_t)((uint16_t)emojiOutPx + 6u);
+  return lhText > lhEmoji ? lhText : lhEmoji;
 }
 
 static void collectWrappedNoteRows(const std::vector<NoteBodyItem>& items,
                                    int16_t                      xMargin,
+                                   uint8_t                     textScale,
+                                   int16_t                      emojiOutPx,
                                    std::vector<std::vector<NoteBodyItem>>& rowsOut) {
   rowsOut.clear();
   std::vector<NoteBodyItem> row;
-  deskFontNote();
+  deskFontNoteScaled(textScale);
   const int16_t spaceW = tft.textWidth(" ");
   const int16_t innerW = tft.width() - 2 * xMargin;
 
@@ -590,7 +632,7 @@ static void collectWrappedNoteRows(const std::vector<NoteBodyItem>& items,
     int32_t w = 0;
     for (size_t j = 0; j < trial.size(); ++j) {
       if (j > 0) w += spaceW;
-      w += measureNoteItemWidth(trial[j]);
+      w += measureNoteItemWidth(trial[j], textScale, emojiOutPx);
     }
     if (w <= (int32_t)innerW || row.empty()) {
       row = trial;
@@ -726,6 +768,7 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   constexpr uint16_t kEmojiBrown   = 0x3A26;
   constexpr int16_t  kFrame     = 8;
   constexpr int16_t  kPanelPad  = 10;
+  constexpr int16_t  kTapGap    = 8;
 
   tft.fillScreen(TFT_BLACK);
 
@@ -743,38 +786,105 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   }
 
   const int16_t xMargin = (int16_t)(kFrame + kPanelPad);
+  const int16_t innerW    = (int16_t)(tft.width() - 2 * xMargin);
   std::vector<NoteBodyItem> items;
   tokenizeNoteBodyItems(mainBody, items);
 
-  std::vector<std::vector<NoteBodyItem>> rows;
-  collectWrappedNoteRows(items, xMargin, rows);
-
-  deskFontNote();
-  const int16_t spaceW     = tft.textWidth(" ");
-  const int16_t kTextLinePx = (int16_t)(8 * kDeskFontScaleNote);
-  const uint16_t lhText     = (uint16_t)(kTextLinePx + 8);
-  const uint16_t lhEmoji    = (uint16_t)(kEmojiNotePx + 6);
-  const uint16_t lineHeight = lhText > lhEmoji ? lhText : lhEmoji;
-
-  constexpr size_t kMaxNoteRows = 10;
-  while (rows.size() > kMaxNoteRows) rows.pop_back();
-
   const int16_t contentBottom = (int16_t)(beigeBottom - kPanelPad);
   const int16_t contentTop    = (int16_t)(kFrame + kPanelPad);
-  const int32_t totalMsgH    = (int32_t)rows.size() * (int32_t)lineHeight;
-  const int32_t availH       = (int32_t)contentBottom - (int32_t)contentTop;
-  int16_t       y0           = (int16_t)(contentTop + (availH - totalMsgH) / 2);
+  const int32_t availHBase    = (int32_t)contentBottom - (int32_t)contentTop;
+  // Keep room for the quick-send line when it will be shown so the main block
+  // does not overlap it after we shrink-to-fit.
+  const bool reserveTapSpace =
+      (messageType == "quick_send" && tapBody.length() > 0);
+  deskFontLittleTap();
+  const int16_t tapLineH = (int16_t)(8 + 6);
+  const int32_t availH =
+      reserveTapSpace ? (availHBase - (int32_t)kTapGap - (int32_t)tapLineH) : availHBase;
+
+  std::vector<std::vector<NoteBodyItem>> rows;
+  uint8_t  noteScale       = 1;
+  int16_t  noteEmojiPx     = (int16_t)EMOJI_SPRITE_PX;
+  bool     noteTightTextPad = false;
+
+  auto layoutFits = [&](uint8_t ts, int16_t emPx, bool tightPad) -> bool {
+    collectWrappedNoteRows(items, xMargin, ts, emPx, rows);
+    const uint16_t lh = noteLineHeightForLayout(ts, emPx, tightPad);
+    if (!rows.empty() && (int32_t)rows.size() * (int32_t)lh > availH) return false;
+    deskFontNoteScaled(ts);
+    const int16_t sw = tft.textWidth(" ");
+    for (size_t ri = 0; ri < rows.size(); ++ri) {
+      int32_t rw = 0;
+      for (size_t j = 0; j < rows[ri].size(); ++j) {
+        if (j > 0) rw += sw;
+        rw += measureNoteItemWidth(rows[ri][j], ts, emPx);
+      }
+      if (rw > (int32_t)innerW) return false;
+    }
+    return true;
+  };
+
+  bool found = false;
+  for (int s = kDeskFontScaleNote; s >= 1; --s) {
+    const int16_t em = emojiLayoutPxForTextScale((uint8_t)s);
+    if (layoutFits((uint8_t)s, em, false)) {
+      noteScale   = (uint8_t)s;
+      noteEmojiPx = em;
+      found       = true;
+      break;
+    }
+  }
+  if (!found) {
+    noteScale = 1;
+    int16_t em = emojiLayoutPxForTextScale(1);
+    for (; em >= 10; em -= 2) {
+      if (layoutFits(1, em, false)) {
+        noteEmojiPx = em;
+        found         = true;
+        break;
+      }
+    }
+    if (!found) {
+      for (em = 10; em >= 8; em -= 2) {
+        if (layoutFits(1, em, true)) {
+          noteEmojiPx      = em;
+          noteTightTextPad = true;
+          found              = true;
+          break;
+        }
+      }
+    }
+    if (!found && layoutFits(1, 8, true)) {
+      noteEmojiPx      = 8;
+      noteTightTextPad = true;
+      found              = true;
+    }
+    if (!found) {
+      noteEmojiPx      = 8;
+      noteTightTextPad = true;
+      collectWrappedNoteRows(items, xMargin, 1, noteEmojiPx, rows);
+    }
+  }
+
+  deskFontNoteScaled(noteScale);
+  const int16_t  spaceW       = tft.textWidth(" ");
+  const int16_t  kTextLinePx  = (int16_t)(8 * noteScale);
+  const uint16_t lineHeight   = noteLineHeightForLayout(noteScale, noteEmojiPx, noteTightTextPad);
+
+  const int32_t totalMsgH = (int32_t)rows.size() * (int32_t)lineHeight;
+  const int32_t vertForMain =
+      reserveTapSpace ? (availHBase - (int32_t)kTapGap - (int32_t)tapLineH) : availHBase;
+  int16_t y0 = (int16_t)(contentTop + (vertForMain - totalMsgH) / 2);
   if (y0 < contentTop) y0 = contentTop;
 
   const bool showTap = (messageType == "quick_send" && tapBody.length() > 0 &&
                         gLittleTapUntilMs != 0 && millis() < gLittleTapUntilMs);
-  constexpr int16_t kTapGap = 8;
 
   for (size_t r = 0; r < rows.size(); ++r) {
     int32_t rw = 0;
     for (size_t j = 0; j < rows[r].size(); ++j) {
       if (j > 0) rw += spaceW;
-      rw += measureNoteItemWidth(rows[r][j]);
+      rw += measureNoteItemWidth(rows[r][j], noteScale, noteEmojiPx);
     }
     int16_t x = (int16_t)((tft.width() - rw) / 2);
     // Row top `y` — align both GLCD text and emoji to one horizontal band: center each
@@ -783,19 +893,19 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
     const int16_t yText =
         y + (int16_t)((lineHeight - kTextLinePx) / 2);
     const int16_t yEmojiBase =
-        y + (int16_t)((lineHeight - (int16_t)kEmojiNotePx) / 2);
+        y + (int16_t)((lineHeight - noteEmojiPx) / 2);
 
     tft.setTextColor(kNoteFg, kNoteBeige);
     for (size_t i = 0; i < rows[r].size(); ++i) {
       const NoteBodyItem& it = rows[r][i];
       if (it.isEmoji) {
-        drawEmojiSprite(x, yEmojiBase, it.spriteUid, kEmojiBrown);
-        x += (int16_t)(kEmojiNotePx + 4);
+        drawEmojiSpriteSized(x, yEmojiBase, it.spriteUid, kEmojiBrown, noteEmojiPx);
+        x += (int16_t)(noteEmojiPx + 4);
         // Emojis land with a slightly longer beat than individual characters —
         // feels like the sender paused to drop in a reaction.
         if (typingDelayMs) delay((uint32_t)typingDelayMs * 2);
       } else {
-        deskFontNote();
+        deskFontNoteScaled(noteScale);
         for (size_t c = 0; c < it.text.length(); ++c) {
           const char ch = it.text[c];
           tft.setCursor(x, yText);
