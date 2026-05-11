@@ -8,7 +8,8 @@
  *      If missing, POST /api/device/register with the X-Device-Key header,
  *      then save the returned credentials to NVS. First boot also keeps the
  *      pairing_code in RAM so we can display it until the desk is claimed.
- *   3. Poll GET /api/device/latest?deviceId=<uuid> every POLL_INTERVAL_MS
+ *   3. After the first paired sync, GET /api/device/latest only when the user
+ *      taps the message area (first paired load uses long GET /api/device/wait).
  *      with Authorization: Bearer <device_token>. The response is one of:
  *         - {"message":null,"reason":"unpaired"} — desk not yet claimed.
  *         - {"message":null}                     — paired, no new note.
@@ -73,7 +74,7 @@ const char* WIFI_PASSWORD = "DEEPAANI123";
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://www.desknote.space";
 const char* kDeviceApiKey    = "5c27a1577e9b48d618f4653957e00996efee71c3752afa4d";
-const char* kFirmwareVersion = "hello-2.2";
+const char* kFirmwareVersion = "hello-2.5";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -97,8 +98,13 @@ static constexpr uint8_t  PIN_BACKLIGHT_R1        = 21;
 static constexpr uint8_t  PIN_BACKLIGHT_R2        = 27;
 static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
 static constexpr uint32_t HTTP_TIMEOUT_MS         = 30000;
+// Long-poll /wait may block up to host DEVICE_WAIT_TIMEOUT_MS (≤55 s) + TLS.
+static constexpr uint32_t HTTP_TIMEOUT_WAIT_MS    = 75000;
 static constexpr uint32_t IDLE_GUARD_MS           = 500;
 static constexpr uint32_t ERROR_BACKOFF_MS        = 5000;
+// In tap-wait mode: background GET /latest this often (4× per 24 h by default).
+static constexpr uint32_t kAutoFetchIntervalMs =
+    (uint32_t)(6UL * 60UL * 60UL * 1000UL);
 
 // ---------------------------------------------------------------------------
 TFT_eSPI    tft = TFT_eSPI();
@@ -1693,21 +1699,19 @@ RegistrationResult registerWithServer() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/device/wait?deviceId=<id>
-//
-// Long-poll: this call blocks until the server has a note for us or its
-// ~25 s timer fires. Either way we just loop and call again — no client-side
-// polling cadence needed. Response shape matches /api/device/latest.
+// GET /api/device/wait or /api/device/latest — same JSON fields the sketch reads.
+// Long-poll /wait is used for the first paired fetch; /latest for tap refreshes
+// (short request, easier on serverless Fluid limits).
 // ---------------------------------------------------------------------------
-LatestResult fetchLatest() {
+static LatestResult deviceFetchLatest(const char* pathAfterHost, uint32_t timeoutMs) {
   LatestResult r{};
 
   String url = kServerBaseUrl;
-  url += "/api/device/wait?deviceId=";
+  url += pathAfterHost;
   url += creds.deviceId;
 
   HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(timeoutMs);
   http.setReuse(false);
   if (!beginHttp(http, url)) {
     return r;
@@ -1751,6 +1755,14 @@ LatestResult fetchLatest() {
     r.messageId   = id;
   }
   return r;
+}
+
+static LatestResult fetchLatestLongPoll() {
+  return deviceFetchLatest("/api/device/wait?deviceId=", HTTP_TIMEOUT_WAIT_MS);
+}
+
+static LatestResult fetchLatestQuickPoll() {
+  return deviceFetchLatest("/api/device/latest?deviceId=", HTTP_TIMEOUT_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -1807,6 +1819,48 @@ String       gCachedMessageType;
 uint32_t     gNoteShownAtMs        = 0;
 bool         gMessageFooterHidden  = false;
 static constexpr uint32_t kMessageFooterVisibleMs = 10UL * 60UL * 1000UL;
+
+// After the first successful paired /wait, only fetch on tap or on the timer below.
+static bool gPairedTapFetchMode = false;
+// millis() anchor for kAutoFetchIntervalMs while in tap-wait mode (0 = not set yet).
+static uint32_t gLastScheduledFetchMs = 0;
+
+// True when (px,py) is on the main message surface (beige card or body), not chrome/status.
+static bool hitMessageFetchZone(int16_t px, int16_t py) {
+  const int16_t w = tft.width();
+  const int16_t h = tft.height();
+  constexpr int16_t kFrame = 8;
+
+  if (displayState == DisplayState::ShowingMessage ||
+      (displayState == DisplayState::WaitingForNote && lastRenderedIdleBody.length() > 0)) {
+    const int16_t footerLineH = (int16_t)(8 * kDeskFontScaleBody + 4);
+    const bool    showFooter  = !gMessageFooterHidden;
+    const int16_t footerY =
+        showFooter ? (int16_t)(h - 10 - footerLineH) : (int16_t)h;
+    const int16_t beigeBottom =
+        showFooter ? (int16_t)(footerY - 8) : (int16_t)(h - kFrame);
+    return px >= kFrame && px < w - kFrame && py >= kFrame && py < beigeBottom;
+  }
+  if (displayState == DisplayState::WaitingForNote) {
+    return px >= 10 && px < w - 10 && py >= 58 && py < (int16_t)(h - 40);
+  }
+  return false;
+}
+
+static void redrawCurrentPairedView() {
+  if (displayState == DisplayState::ShowingMessage) {
+    drawMessageScreen(gCachedMainBody, lastPairedDeskName, !gMessageFooterHidden,
+                      gCachedMessageType, gCachedTapBody, 0);
+  } else if (displayState == DisplayState::WaitingForNote) {
+    if (lastRenderedIdleBody.length() > 0) {
+      drawMessageScreen(lastRenderedIdleBody, lastPairedDeskName, !gMessageFooterHidden, "",
+                        "", 0);
+    } else {
+      drawWaitingForNote(lastPairedDeskName, lastPairedDeskLocation, lastPairedOwnerName);
+      drawStatus("Paired and online.", TFT_GREEN);
+    }
+  }
+}
 
 void enterWaitingForNote(const String& deskName,
                          const String& deskLocation,
@@ -1955,21 +2009,24 @@ void setup() {
 // ---------------------------------------------------------------------------
 // Poll loop
 // ---------------------------------------------------------------------------
-void pollOnce() {
+// userTapFetch: show Update / Nothing new hints (tap); false for timer-driven fetch.
+// Returns true when the HTTP round-trip succeeded (latest.ok).
+bool pollOnce(bool quickHttp, bool userTapFetch) {
   if (!hasCreds()) {
     ensureRegistered();
-    return;
+    return false;
   }
 
-  const LatestResult latest = fetchLatest();
+  const LatestResult latest =
+      quickHttp ? fetchLatestQuickPoll() : fetchLatestLongPoll();
 
   if (!latest.ok) {
-    Serial.printf("GET /wait failed (HTTP %d)\n", latest.httpStatus);
+    Serial.printf("GET device poll failed (HTTP %d)\n", latest.httpStatus);
     if (latest.httpStatus == 401) {
       Serial.println(F("Token rejected — wiping NVS and re-registering."));
       wipeCreds();
       ensureRegistered();
-      return;
+      return false;
     }
 
     // Non-401: TLS error, timeout, 5xx, or the CDN cutting long-polls. Don't
@@ -1997,7 +2054,7 @@ void pollOnce() {
         enterError("Server unreachable", detail);
       }
     }
-    return;
+    return false;
   }
 
   // Success clears the offline banner if we were showing it.
@@ -2029,10 +2086,10 @@ void pollOnce() {
       Serial.println(F("Server says unpaired but we have no code — re-registering."));
       wipeCreds();
       ensureRegistered();
-      return;
+      return false;
     }
     enterUnpaired(bootPairingCode);
-    return;
+    return true;
   }
 
   // Paired from here on.
@@ -2046,19 +2103,42 @@ void pollOnce() {
 
   if (latest.hasMessage) {
     if (latest.messageId != currentNoteId) {
+      if (userTapFetch) {
+        drawStatus("Update", TFT_GREEN);
+        delay(380);
+      }
       Serial.printf("New note %s: %s\n",
                     latest.messageId.c_str(), latest.messageBody.c_str());
       currentNoteId = latest.messageId;
       enterShowingMessage(latest.messageBody, latest.messageType);
       markSeen(latest.messageId);
+      gPairedTapFetchMode = true;
+      return true;
     }
-    return;
+    if (userTapFetch) {
+      drawStatus("Nothing new", TFT_WHITE);
+      delay(850);
+      redrawCurrentPairedView();
+      gPairedTapFetchMode = true;
+      return true;
+    }
+    return true;
+  }
+
+  if (userTapFetch) {
+    drawStatus("Nothing new", TFT_WHITE);
+    delay(850);
+    redrawCurrentPairedView();
+    gPairedTapFetchMode = true;
+    return true;
   }
 
   // Paired, no queued note — idle hero (last_message_body from API) or legacy
   // "Paired" screen. Also runs after markSeen when leaving ShowingMessage.
   enterWaitingForNote(latest.deskName, latest.deskLocation, latest.ownerName,
                       latest.lastMessageBody);
+  gPairedTapFetchMode = true;
+  return true;
 }
 
 void loop() {
@@ -2080,9 +2160,37 @@ void loop() {
                   WiFi.RSSI(), (unsigned)ESP.getFreeHeap(), (int)displayState);
   }
 
-  // One long-poll cycle per loop iteration. /api/device/wait blocks up to
-  // ~25 s server-side, so this loop is naturally paced without sleeps.
-  pollOnce();
+  // First paired load uses long /wait; after that GET /latest on tap or every
+  // kAutoFetchIntervalMs (4× per day by default).
+  bool        runPoll      = true;
+  bool        quick        = false;
+  bool        userTapFetch = false;
+  const bool  defer =
+      gPairedTapFetchMode && gServerReachable &&
+      (displayState == DisplayState::WaitingForNote ||
+       displayState == DisplayState::ShowingMessage);
+  if (defer) {
+    runPoll = false;
+    if (gLastScheduledFetchMs == 0) gLastScheduledFetchMs = now;
+    if ((uint32_t)(now - gLastScheduledFetchMs) >= kAutoFetchIntervalMs) {
+      runPoll = true;
+      quick   = true;
+    } else {
+      int16_t tx = 0, ty = 0;
+      if (pollTapOnce(tx, ty) && hitMessageFetchZone(tx, ty)) {
+        runPoll      = true;
+        quick        = true;
+        userTapFetch = true;
+      }
+    }
+  }
+  if (runPoll) {
+    const bool scheduledQuick = defer && quick && !userTapFetch;
+    const bool ok             = pollOnce(quick, userTapFetch);
+    if (scheduledQuick && ok) gLastScheduledFetchMs = millis();
+  } else {
+    delay(80);
+  }
 
   if (displayState == DisplayState::ShowingMessage &&
       gCachedMessageType == "quick_send" && gLittleTapUntilMs != 0 &&
