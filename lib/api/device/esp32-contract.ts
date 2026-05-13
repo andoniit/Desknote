@@ -33,12 +33,14 @@
  * ```
  * → `200 {"ok":true,"server_time":"2026-04-17T12:00:00.000Z"}`
  *
- * Latest queued message (newest first):
+ * Latest queued message (newest first) + desk context (same flat keys as `/wait` when paired):
  * ```http
  * GET /api/device/latest?deviceId=<device_id>
  * Authorization: Bearer <device_token>
  * ```
- * → `200 {"message":{"id":"...","body":"Hi","created_at":"..."}}` or `{"message":null,"reason":"unpaired"}`
+ * → `200` with `message` (queued note or null), plus optional `theme`, `accent_color`, `name`,
+ * `location_name`, `display_name`, `last_message_body` from the DB so the display can apply
+ * the theme chosen under Devices → desk settings without long-polling `/wait`.
  *
  * Mark seen:
  * ```http

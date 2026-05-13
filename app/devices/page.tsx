@@ -61,6 +61,7 @@ export default async function DevicesPage() {
                   name: d.name,
                   location_name: d.location_name,
                   theme: d.theme,
+                  accent_color: d.accent_color,
                   firmware_version: d.firmware_version,
                   online: d.online,
                   last_seen_at: d.last_seen_at,

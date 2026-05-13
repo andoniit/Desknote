@@ -74,7 +74,7 @@ const char* WIFI_PASSWORD = "DEEPAANI123";
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://www.desknote.space";
 const char* kDeviceApiKey    = "5c27a1577e9b48d618f4653957e00996efee71c3752afa4d";
-const char* kFirmwareVersion = "hello-2.5";
+const char* kFirmwareVersion = "hello-2.7";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -1866,42 +1866,50 @@ void enterWaitingForNote(const String& deskName,
                          const String& deskLocation,
                          const String& ownerName,
                          const String& lastMessageBody) {
-  // Hero text: prefer the last long-form message we stored so a quick_send note
-  // (newest in API) does not replace it on the idle screen.
+  // GET /api/device/latest returns only { "message": null } when the queue is
+  // empty — no desk/theme/last_message_body. Preserve cached fields and idle
+  // hero so a timer or tap poll does not drop back to the legacy "Paired" UI.
+  const String effDesk  = deskName.length() ? deskName : lastPairedDeskName;
+  const String effLoc   = deskLocation.length() ? deskLocation : lastPairedDeskLocation;
+  const String effOwner = ownerName.length() ? ownerName : lastPairedOwnerName;
+
+  // Hero: prefer persisted standard body, else server idle text, else keep what we already show.
   const String heroBody =
-      (gPersistedMainMessage.length() > 0) ? gPersistedMainMessage : lastMessageBody;
+      (gPersistedMainMessage.length() > 0) ? gPersistedMainMessage
+      : (lastMessageBody.length() > 0 ? lastMessageBody : lastRenderedIdleBody);
 
   const bool alreadyShowing =
       displayState == DisplayState::WaitingForNote &&
-      deskName == lastPairedDeskName &&
-      deskLocation == lastPairedDeskLocation &&
-      ownerName == lastPairedOwnerName &&
+      effDesk == lastPairedDeskName &&
+      effLoc == lastPairedDeskLocation &&
+      effOwner == lastPairedOwnerName &&
       gThemeId == lastRenderedThemeId &&
       gAccentId == lastRenderedAccentId &&
       heroBody == lastRenderedIdleBody;
   if (alreadyShowing) return;
 
-  lastPairedDeskName     = deskName;
-  lastPairedDeskLocation = deskLocation;
-  lastPairedOwnerName    = ownerName;
+  if (deskName.length()) lastPairedDeskName = deskName;
+  if (deskLocation.length()) lastPairedDeskLocation = deskLocation;
+  if (ownerName.length()) lastPairedOwnerName = ownerName;
   lastRenderedThemeId    = gThemeId;
   lastRenderedAccentId   = gAccentId;
   lastRenderedIdleBody   = heroBody;
 
   const bool skipIntroFromNote =
-      displayState == DisplayState::ShowingMessage && lastMessageBody.length() > 0 &&
-      lastMessageBody == gCachedNoteBody;
+      displayState == DisplayState::ShowingMessage && heroBody.length() > 0 &&
+      ((lastMessageBody.length() > 0 && lastMessageBody == gCachedNoteBody) ||
+       (heroBody == gCachedMainBody));
 
   if (heroBody.length() > 0) {
     if (skipIntroFromNote) {
-      drawMessageScreen(heroBody, deskName, true, "", "");
+      drawMessageScreen(heroBody, effDesk, true, "", "");
     } else {
-      playTypingIntro(heroBody, "", deskName, true, "");
+      playTypingIntro(heroBody, "", effDesk, true, "");
     }
     gNoteShownAtMs       = millis();
     gMessageFooterHidden = false;
   } else {
-    drawWaitingForNote(deskName, deskLocation, ownerName);
+    drawWaitingForNote(effDesk, effLoc, effOwner);
     drawStatus("Paired and online.", TFT_GREEN);
   }
   displayState = DisplayState::WaitingForNote;
@@ -2053,6 +2061,11 @@ bool pollOnce(bool quickHttp, bool userTapFetch) {
                           : ("HTTP " + String(latest.httpStatus));
         enterError("Server unreachable", detail);
       }
+    } else if (userTapFetch &&
+               (displayState == DisplayState::ShowingMessage ||
+                displayState == DisplayState::WaitingForNote)) {
+      // Tap showed "Checking..." — clear it if we did not full-redraw above.
+      redrawCurrentPairedView();
     }
     return false;
   }
@@ -2178,9 +2191,11 @@ void loop() {
     } else {
       int16_t tx = 0, ty = 0;
       if (pollTapOnce(tx, ty) && hitMessageFetchZone(tx, ty)) {
-        runPoll      = true;
-        quick        = true;
-        userTapFetch = true;
+        runPoll       = true;
+        quick         = true;
+        userTapFetch  = true;
+        ThemePalette palTap = paletteForDesk();
+        drawStatus("Checking...", palTap.accent);
       }
     }
   }

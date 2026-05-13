@@ -1,6 +1,7 @@
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 import { UnpairDeviceButton } from "@/components/devices/UnpairDeviceButton";
 import { themeLabel } from "@/lib/devices/themes";
+import { accentLabel } from "@/lib/devices/accents";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
 export type DeviceCardModel = {
@@ -8,6 +9,7 @@ export type DeviceCardModel = {
   name: string;
   location_name: string | null;
   theme: string | null;
+  accent_color: string | null;
   firmware_version: string | null;
   online: boolean | null;
   last_seen_at: string | null;
@@ -34,7 +36,9 @@ export function DeviceCard({
               <span className="text-plum-200">No room label yet</span>
             )}
             <span className="mx-1.5 text-plum-200">·</span>
-            <span>Theme: {themeLabel(device.theme)}</span>
+            <span>
+              Theme: {themeLabel(device.theme)} · Accent: {accentLabel(device.accent_color)}
+            </span>
           </CardDescription>
         </div>
         <span
