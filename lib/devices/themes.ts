@@ -1,8 +1,12 @@
 export const DEVICE_THEMES = [
-  { id: "cream", label: "Cream & plum", hint: "Soft default, like the app" },
-  { id: "blush", label: "Blush", hint: "Warm rose highlights" },
-  { id: "plum", label: "Plum", hint: "Deeper accent" },
-  { id: "sage", label: "Sage", hint: "Quiet green calm" },
+  {
+    id: "cream",
+    label: "Cream & plum",
+    hint: "Header, menus, and paired screens — soft default like the app.",
+  },
+  { id: "blush", label: "Blush", hint: "Warm rose frame and menu tones." },
+  { id: "plum", label: "Plum", hint: "Deeper frame and menu background." },
+  { id: "sage", label: "Sage", hint: "Quiet green frame and menu tones." },
 ] as const;
 
 export type DeviceThemeId = (typeof DEVICE_THEMES)[number]["id"];

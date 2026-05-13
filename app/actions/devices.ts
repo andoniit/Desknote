@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { isDeviceAccentId } from "@/lib/devices/accents";
+import { isDeviceNoteCardBackgroundId } from "@/lib/devices/note-card-background";
 import { isDeviceThemeId } from "@/lib/devices/themes";
 import {
   validateDeviceId,
@@ -145,6 +146,7 @@ export async function updateDeviceSettingsAction(
   const location = String(formData.get("location_name") ?? "");
   const theme = String(formData.get("theme") ?? "").trim().toLowerCase();
   const accent = String(formData.get("accent_color") ?? "").trim().toLowerCase();
+  const noteCardBg = String(formData.get("note_card_background") ?? "").trim().toLowerCase();
   const pinnedRaw = formData.get("pinned_mode_enabled");
   const pinned_mode_enabled = pinnedRaw === "on" || pinnedRaw === "true";
 
@@ -160,6 +162,10 @@ export async function updateDeviceSettingsAction(
 
   if (!isDeviceAccentId(accent)) {
     return { ok: false, message: "Pick one of the accent colors from the list." };
+  }
+
+  if (!isDeviceNoteCardBackgroundId(noteCardBg)) {
+    return { ok: false, message: "Pick one of the message card backgrounds from the list." };
   }
 
   const supabase = createClient(await cookies());
@@ -198,6 +204,7 @@ export async function updateDeviceSettingsAction(
       location_name: location.trim() || null,
       theme,
       accent_color: accent,
+      note_card_background: noteCardBg,
       pinned_mode_enabled,
     })
     .eq("id", deviceId)
@@ -207,7 +214,8 @@ export async function updateDeviceSettingsAction(
     return {
       ok: false,
       message:
-        updErr.message?.includes("column") && updErr.message.includes("accent")
+        updErr.message?.includes("column") &&
+        (updErr.message.includes("accent") || updErr.message.includes("note_card"))
           ? "Your database is missing the latest desk columns. Apply migrations in Supabase, then try again."
           : "Something went wrong while saving. Please try again shortly.",
     };

@@ -70,7 +70,7 @@ export async function GET(request: Request) {
   const [deskRes, ownerRes, lastNoteRes] = await Promise.all([
     auth.supabase
       .from("devices")
-      .select("name, location_name, theme, accent_color")
+      .select("name, location_name, theme, accent_color, note_card_background")
       .eq("id", auth.deviceId)
       .maybeSingle(),
     auth.supabase
@@ -92,6 +92,7 @@ export async function GET(request: Request) {
     location_name: (deskRes.data?.location_name as string | null) ?? null,
     theme: (deskRes.data?.theme as string | null) ?? null,
     accent_color: (deskRes.data?.accent_color as string | null) ?? null,
+    note_card_background: (deskRes.data?.note_card_background as string | null) ?? null,
   };
   const owner = {
     display_name: (ownerRes.data?.display_name as string | null) ?? null,
@@ -143,6 +144,7 @@ export async function GET(request: Request) {
     if (owner.display_name != null) flat.display_name = owner.display_name;
     if (desk.theme != null) flat.theme = desk.theme;
     if (desk.accent_color != null) flat.accent_color = desk.accent_color;
+    if (desk.note_card_background != null) flat.note_card_background = desk.note_card_background;
     if (lastMessageBody != null) flat.last_message_body = lastMessageBody;
     return flat;
   };

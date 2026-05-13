@@ -74,7 +74,7 @@ const char* WIFI_PASSWORD = "DEEPAANI123";
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://www.desknote.space";
 const char* kDeviceApiKey    = "5c27a1577e9b48d618f4653957e00996efee71c3752afa4d";
-const char* kFirmwareVersion = "hello-2.7";
+const char* kFirmwareVersion = "hello-3.0";
 
 // ---------------------------------------------------------------------------
 // Debug: set to 1 to wipe saved credentials on boot and re-register. Leave at
@@ -150,6 +150,7 @@ struct LatestResult {
   String ownerName;
   String themeId;
   String accentId; // JSON key accent_color
+  String noteCardBackground; // JSON note_card_background: light | dark | match_theme
   // Newest note body for this recipient (any status); for idle hero when queue empty.
   String lastMessageBody;
   /// From `messages.message_type` when a queued note is returned (e.g. `quick_send`).
@@ -161,6 +162,7 @@ struct LatestResult {
 // Declared with LatestResult so auto-generated prototypes see ThemePalette.
 String gThemeId  = "cream";
 String gAccentId = "";
+String gNoteCardBackground = "match_theme";
 
 struct ThemePalette {
   uint16_t bg;
@@ -169,6 +171,13 @@ struct ThemePalette {
   uint16_t title;
   uint16_t body;
   uint16_t subtle;
+  /** Full-screen note / idle hero card (was fixed beige + brown). */
+  uint16_t notePanel;
+  uint16_t noteFg;
+  /** “DeskNote-{name}” on the black strip under the rounded card. */
+  uint16_t noteFooterOnBlack;
+  /** Monochrome emoji / sticker tint on the note panel. */
+  uint16_t noteEmoji;
 };
 
 // First-boot-only: the pairing code we just got back from /register. We
@@ -333,6 +342,10 @@ ThemePalette paletteForDesk() {
     p.title = 0xFFFF;
     p.body = 0xFFDD;
     p.subtle = 0xC99A;
+    p.notePanel         = 0xFFFA;  // warm paper (rose-tinted cream)
+    p.noteFg            = 0x6A2C;  // deep warm brown
+    p.noteFooterOnBlack = 0xFC98;  // soft rose on black
+    p.noteEmoji         = 0x8C28;  // dusty rose-brown icons
   } else if (t == "plum") {
     p.bg = 0x0804;
     p.headerBar = 0x1806;
@@ -340,6 +353,10 @@ ThemePalette paletteForDesk() {
     p.title = 0xFFFF;
     p.body = 0xF79E;
     p.subtle = 0xB5B6;
+    p.notePanel         = 0xDCD8;  // cool lilac paper
+    p.noteFg            = 0x2006;  // near-black plum
+    p.noteFooterOnBlack = 0xCDBC;  // muted lilac on black
+    p.noteEmoji         = 0x4C29;  // mauve icons on panel
   } else if (t == "sage") {
     p.bg = 0x0208;
     p.headerBar = 0x032C;
@@ -347,14 +364,22 @@ ThemePalette paletteForDesk() {
     p.title = 0xFFFF;
     p.body = 0xE6F2;
     p.subtle = 0x8C99;
+    p.notePanel         = 0xE7F6;  // soft sage paper
+    p.noteFg            = 0x1A28;  // deep forest brown
+    p.noteFooterOnBlack = 0x9ED3;  // sage mist on black
+    p.noteEmoji         = 0x3546;  // muted green-brown icons
   } else {
-    // cream (default)
+    // cream (default) — original warm letter card
     p.bg = 0x0000;
     p.headerBar = 0x1082;
     p.accent = acc;
     p.title = 0xFFFF;
     p.body = 0xF79E;
     p.subtle = 0x8C71;
+    p.notePanel         = 0xF7BB;  // #F5F5DC beige
+    p.noteFg            = 0x7B0C;  // warm brown body
+    p.noteFooterOnBlack = 0xCD2C;  // light brown on black footer
+    p.noteEmoji         = 0x3A26;  // chocolate MDI stickers
   }
   return p;
 }
@@ -751,10 +776,46 @@ void drawWaitingForNote(const String& deskName,
   tft.print(sub);
 }
 
-// Full-screen centered note (pixel GLCD + MDI sprites). Outer frame is black; an inset
-// rounded panel is #F5F5DC (beige); body text a darker brown. Long (standard) message is
-// centered in the beige area; quick_send line is separate, below the main text,
-// for `kLittleTapVisibleMs`. Footer on black: DeskNote-{desk name} when showFooter.
+// Approximate luma for RGB565 — used to force light text on dark note panels.
+static bool rgb565PanelIsDark(uint16_t c) {
+  const uint32_t r = (uint32_t)((c >> 11) & 31) * 255 / 31;
+  const uint32_t g = (uint32_t)((c >> 5) & 63) * 255 / 63;
+  const uint32_t b = (uint32_t)(c & 31) * 255 / 31;
+  const int32_t  y = (int32_t)((77 * r + 150 * g + 29 * b) >> 8);
+  return y < 100;
+}
+
+// gNoteCardBackground: light | dark | match_theme (from web app).
+static void resolveNoteCardPaint(const ThemePalette& pal, uint16_t& panel, uint16_t& fg,
+                                 uint16_t& footerOnBlack, uint16_t& emoji) {
+  String mode = gNoteCardBackground.length() ? gNoteCardBackground : String("match_theme");
+  mode.trim();
+  mode.toLowerCase();
+
+  if (mode == String("light")) {
+    panel          = 0xF7BB;
+    fg             = 0x7B0C;
+    footerOnBlack  = 0xCD2C;
+    emoji          = 0x3A26;
+  } else if (mode == String("dark")) {
+    panel          = 0x2104;
+    fg             = 0xFFDD;
+    footerOnBlack  = 0xBDF7;
+    emoji          = 0xCE79;
+  } else {
+    panel          = pal.notePanel;
+    fg             = pal.noteFg;
+    footerOnBlack  = pal.noteFooterOnBlack;
+    emoji          = pal.noteEmoji;
+    if (rgb565PanelIsDark(panel)) {
+      fg    = 0xFFDD;
+      emoji = 0xDEDB;
+    }
+  }
+}
+
+// Full-screen centered note (pixel GLCD + MDI sprites). Outer frame stays black;
+// rounded panel + text + emoji from note-card mode (light / dark / match theme).
 //
 // typingDelayMs > 0 makes text + emoji reveal progressively (like a typewriter).
 // The card, hearts, and positioning are still painted in one go first, so we
@@ -764,17 +825,12 @@ void drawWaitingForNote(const String& deskName,
 void drawMessageScreen(const String& mainBody, const String& deskName, bool showFooter,
                        const String& messageType, const String& tapBody,
                        uint8_t typingDelayMs = 0) {
-  // #F5F5DC (beige) + darker warm browns for text (fixed RGB565, not theme-driven).
-  constexpr uint16_t kNoteBeige     = 0xF7BB;
-  // ~#6B4A2E — was 0xC530; deeper brown reads clearer on the cream panel.
-  constexpr uint16_t kNoteFg        = 0x7B0C;
-  // Lighter brown for the black footer strip (same hue family, more contrast on black).
-  constexpr uint16_t kNoteFgFooter  = 0xCD2C;
-  // MDI stickers: deep chocolate brown (a touch darker than old 0x49A5 for contrast on beige).
-  constexpr uint16_t kEmojiBrown   = 0x3A26;
-  constexpr int16_t  kFrame     = 8;
-  constexpr int16_t  kPanelPad  = 10;
-  constexpr int16_t  kTapGap    = 8;
+  const ThemePalette pal = paletteForDesk();
+  uint16_t          kNoteBeige, kNoteFg, kNoteFgFooter, kEmojiBrown;
+  resolveNoteCardPaint(pal, kNoteBeige, kNoteFg, kNoteFgFooter, kEmojiBrown);
+  constexpr int16_t kFrame     = 8;
+  constexpr int16_t kPanelPad  = 10;
+  constexpr int16_t kTapGap    = 8;
 
   tft.fillScreen(TFT_BLACK);
 
@@ -1743,6 +1799,7 @@ static LatestResult deviceFetchLatest(const char* pathAfterHost, uint32_t timeou
   extractJsonString(payload, "display_name", r.ownerName);
   extractJsonString(payload, "theme", r.themeId);
   extractJsonString(payload, "accent_color", r.accentId);
+  extractJsonString(payload, "note_card_background", r.noteCardBackground);
   extractJsonString(payload, "last_message_body", r.lastMessageBody);
   extractJsonString(payload, "message_type", r.messageType);
 
@@ -1809,6 +1866,7 @@ String lastPairedDeskLocation;
 String lastPairedOwnerName;
 String lastRenderedThemeId;
 String lastRenderedAccentId;
+String lastRenderedNoteCardBg;
 String lastRenderedIdleBody;
 
 // Note screen: cache body for footer timeout redraw (centered layout).
@@ -1885,15 +1943,17 @@ void enterWaitingForNote(const String& deskName,
       effOwner == lastPairedOwnerName &&
       gThemeId == lastRenderedThemeId &&
       gAccentId == lastRenderedAccentId &&
+      gNoteCardBackground == lastRenderedNoteCardBg &&
       heroBody == lastRenderedIdleBody;
   if (alreadyShowing) return;
 
   if (deskName.length()) lastPairedDeskName = deskName;
   if (deskLocation.length()) lastPairedDeskLocation = deskLocation;
   if (ownerName.length()) lastPairedOwnerName = ownerName;
-  lastRenderedThemeId    = gThemeId;
-  lastRenderedAccentId   = gAccentId;
-  lastRenderedIdleBody   = heroBody;
+  lastRenderedThemeId      = gThemeId;
+  lastRenderedAccentId     = gAccentId;
+  lastRenderedNoteCardBg   = gNoteCardBackground;
+  lastRenderedIdleBody     = heroBody;
 
   const bool skipIntroFromNote =
       displayState == DisplayState::ShowingMessage && heroBody.length() > 0 &&
@@ -2110,6 +2170,11 @@ bool pollOnce(bool quickHttp, bool userTapFetch) {
 
   if (latest.themeId.length()) gThemeId = latest.themeId;
   if (latest.accentId.length()) gAccentId = latest.accentId;
+  if (latest.noteCardBackground.length()) {
+    gNoteCardBackground = latest.noteCardBackground;
+    gNoteCardBackground.trim();
+    gNoteCardBackground.toLowerCase();
+  }
   if (latest.deskName.length()) lastPairedDeskName = latest.deskName;
   if (latest.deskLocation.length()) lastPairedDeskLocation = latest.deskLocation;
   if (latest.ownerName.length()) lastPairedOwnerName = latest.ownerName;

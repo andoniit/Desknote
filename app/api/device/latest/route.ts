@@ -30,7 +30,7 @@ export async function GET(request: Request) {
   const [deskRes, ownerRes, lastNoteRes, queuedRes] = await Promise.all([
     auth.supabase
       .from("devices")
-      .select("name, location_name, theme, accent_color")
+      .select("name, location_name, theme, accent_color, note_card_background")
       .eq("id", auth.deviceId)
       .maybeSingle(),
     auth.supabase
@@ -75,6 +75,7 @@ export async function GET(request: Request) {
   if (desk?.location_name) payload.location_name = desk.location_name;
   if (desk?.theme) payload.theme = desk.theme;
   if (desk?.accent_color) payload.accent_color = desk.accent_color;
+  if (desk?.note_card_background) payload.note_card_background = desk.note_card_background;
   if (owner?.display_name) payload.display_name = owner.display_name;
   if (lastBody !== null) payload.last_message_body = lastBody;
 

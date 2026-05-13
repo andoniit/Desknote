@@ -6,9 +6,11 @@ import {
   type UpdateDeviceSettingsState,
 } from "@/app/actions/devices";
 import { DEVICE_ACCENTS } from "@/lib/devices/accents";
+import { DEVICE_NOTE_CARD_BACKGROUNDS } from "@/lib/devices/note-card-background";
 import { DEVICE_THEMES } from "@/lib/devices/themes";
 import type { PairedDeviceRow } from "@/lib/data/paired-devices";
 import { isDeviceAccentId } from "@/lib/devices/accents";
+import { isDeviceNoteCardBackgroundId } from "@/lib/devices/note-card-background";
 import { isDeviceThemeId } from "@/lib/devices/themes";
 import { Button } from "@/components/ui/Button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
@@ -33,6 +35,11 @@ function defaultAccent(device: PairedDeviceRow): string {
   return isDeviceAccentId(a) ? a : "rose";
 }
 
+function defaultNoteCardBackground(device: PairedDeviceRow): string {
+  const v = device.note_card_background?.trim().toLowerCase() ?? "";
+  return isDeviceNoteCardBackgroundId(v) ? v : "match_theme";
+}
+
 export function DeviceSettingsForm({ device, disabled }: Props) {
   const [state, formAction, pending] = useActionState(
     updateDeviceSettingsAction,
@@ -41,6 +48,7 @@ export function DeviceSettingsForm({ device, disabled }: Props) {
 
   const themeInit = defaultTheme(device);
   const accentInit = defaultAccent(device);
+  const noteCardInit = defaultNoteCardBackground(device);
   const pinnedInit = device.pinned_mode_enabled === true;
 
   return (
@@ -81,8 +89,11 @@ export function DeviceSettingsForm({ device, disabled }: Props) {
         </div>
 
         <fieldset className="space-y-2">
-          <legend className="text-sm font-medium text-plum-400">Desk theme</legend>
-          <p className="text-xs text-plum-200">Background mood for this display.</p>
+          <legend className="text-sm font-medium text-plum-400">Desk frame &amp; menus</legend>
+          <p className="text-xs text-plum-200">
+            Top bar and paired / waiting screens on the physical desk — not the big message letter
+            (that is the next section).
+          </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {DEVICE_THEMES.map((t) => (
               <label
@@ -114,7 +125,11 @@ export function DeviceSettingsForm({ device, disabled }: Props) {
 
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium text-plum-400">Accent color</legend>
-          <p className="text-xs text-plum-200">Highlights and chips that echo this desk in the app.</p>
+          <p className="text-xs text-plum-200">
+            Highlights in the web app and on the desk <span className="font-medium">header</span>{" "}
+            (badges, links, firmware chip). Same palette as when you pick Rose, Blush, Plum, Sage, or
+            Cream here.
+          </p>
           <div className="flex flex-wrap gap-2 sm:gap-3">
             {DEVICE_ACCENTS.map((a) => (
               <label
@@ -143,6 +158,42 @@ export function DeviceSettingsForm({ device, disabled }: Props) {
                   aria-hidden
                 />
                 <span className="text-center text-[11px] font-medium text-plum-400">{a.label}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium text-plum-400">Message letter on the desk</legend>
+          <p className="text-xs text-plum-200">
+            The large rounded card where notes appear. Choose light paper, a dark card with light
+            type, or colors that follow <span className="font-medium">Desk frame &amp; menus</span>{" "}
+            above (with automatic light text if that style is dark).
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {DEVICE_NOTE_CARD_BACKGROUNDS.map((opt) => (
+              <label
+                key={opt.id}
+                className={cn(
+                  "flex cursor-pointer flex-col rounded-2xl border border-ash-200/70 bg-white/60 px-3 py-3 transition",
+                  "has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-rose-100/80",
+                  "has-[:checked]:border-rose-200 has-[:checked]:bg-blush-50/60 has-[:checked]:shadow-soft"
+                )}
+              >
+                <span className="flex items-start gap-2">
+                  <input
+                    type="radio"
+                    name="note_card_background"
+                    value={opt.id}
+                    defaultChecked={noteCardInit === opt.id}
+                    disabled={disabled || pending}
+                    className="mt-1 h-4 w-4 shrink-0 border-ash-300 text-plum-400 focus:ring-rose-200"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-plum-500">{opt.label}</span>
+                    <span className="mt-0.5 block text-xs text-plum-300">{opt.hint}</span>
+                  </span>
+                </span>
               </label>
             ))}
           </div>
