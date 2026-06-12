@@ -57,8 +57,8 @@ struct NoteBodyItem {
 // ---------------------------------------------------------------------------
 // Wi-Fi credentials — replace the two placeholders.
 // ---------------------------------------------------------------------------
-const char* WIFI_SSID     = "DEEPAANI";
-const char* WIFI_PASSWORD = "DEEPAANI123";
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
 // ---------------------------------------------------------------------------
 // DeskNote server configuration.
@@ -73,7 +73,7 @@ const char* WIFI_PASSWORD = "DEEPAANI123";
 // they differ the server returns HTTP 401 from /api/device/register.
 // ---------------------------------------------------------------------------
 const char* kServerBaseUrl   = "https://www.desknote.space";
-const char* kDeviceApiKey    = "5c27a1577e9b48d618f4653957e00996efee71c3752afa4d";
+const char* kDeviceApiKey    = "REPLACE_WITH_DEVICE_API_KEY";
 const char* kFirmwareVersion = "hello-3.0";
 
 // ---------------------------------------------------------------------------
