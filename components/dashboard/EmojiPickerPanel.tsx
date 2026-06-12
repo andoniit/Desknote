@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { SUPPORTED_EMOJI } from "@/lib/emoji/supported.gen";
 import { cn } from "@/lib/utils";
 
@@ -12,15 +12,21 @@ type Props = {
   disabled?: boolean;
 };
 
-type HScrollUi = {
-  canScroll: boolean;
-  thumbW: number;
-  thumbLeft: number;
-};
+/** Display order + labels for the category ids emitted by the generator. */
+const CATEGORIES: { id: string; label: string }[] = [
+  { id: "love", label: "Love" },
+  { id: "spicy", label: "Spicy" },
+  { id: "faces", label: "Faces" },
+  { id: "animals", label: "Animals" },
+  { id: "nature", label: "Nature" },
+  { id: "food", label: "Food" },
+  { id: "fun", label: "Fun" },
+  { id: "everyday", label: "Everyday" },
+];
 
 /**
- * All stickers in one horizontal line; swipe / drag the row (or use the bar
- * below) to scroll. A slim track under the row shows where you are in the row.
+ * Stickers grouped by category: tap a chip to switch, stickers lay out in a
+ * wrapped grid below — no sideways hunting through one long row.
  */
 export function EmojiPickerPanel({
   textareaRef,
@@ -29,48 +35,28 @@ export function EmojiPickerPanel({
   valueLength,
   disabled,
 }: Props) {
-  const rowRef = useRef<HTMLDivElement>(null);
-  const [scrollUi, setScrollUi] = useState<HScrollUi>({
-    canScroll: false,
-    thumbW: 100,
-    thumbLeft: 0,
-  });
-
-  const emoji = useMemo(() => {
+  const byCategory = useMemo(() => {
     const seen = new Set<string>();
-    return SUPPORTED_EMOJI.filter((e) => {
-      if (seen.has(e.char)) return false;
+    const map = new Map<string, typeof SUPPORTED_EMOJI>();
+    for (const e of SUPPORTED_EMOJI) {
+      if (seen.has(e.char)) continue;
       seen.add(e.char);
-      return true;
-    });
-  }, []);
-
-  const updateHScrollUi = useCallback(() => {
-    const el = rowRef.current;
-    if (!el) return;
-    const { scrollLeft, scrollWidth, clientWidth } = el;
-    const canScroll = scrollWidth > clientWidth + 1;
-    if (!canScroll) {
-      setScrollUi({ canScroll: false, thumbW: 100, thumbLeft: 0 });
-      return;
+      const id = CATEGORIES.some((c) => c.id === e.category)
+        ? e.category
+        : "fun";
+      const list = map.get(id) ?? [];
+      list.push(e);
+      map.set(id, list);
     }
-    const maxScroll = Math.max(1, scrollWidth - clientWidth);
-    const thumbW = Math.min(
-      100,
-      Math.max(10, (clientWidth / scrollWidth) * 100)
-    );
-    const thumbLeft = (scrollLeft / maxScroll) * (100 - thumbW);
-    setScrollUi({ canScroll: true, thumbW, thumbLeft });
+    return map;
   }, []);
 
-  useLayoutEffect(() => {
-    updateHScrollUi();
-    const el = rowRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => updateHScrollUi());
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [emoji.length, updateHScrollUi]);
+  const tabs = useMemo(
+    () => CATEGORIES.filter((c) => (byCategory.get(c.id)?.length ?? 0) > 0),
+    [byCategory]
+  );
+  const [activeId, setActiveId] = useState<string>(() => tabs[0]?.id ?? "love");
+  const active = byCategory.get(activeId) ?? [];
 
   function insert(ch: string) {
     const el = textareaRef.current;
@@ -90,18 +76,6 @@ export function EmojiPickerPanel({
     });
   }
 
-  /** Tap track: jump scroll position to match click (left = start, right = end). */
-  function onTrackPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    const row = rowRef.current;
-    if (!row || !scrollUi.canScroll) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const ratio = Math.min(1, Math.max(0, x / rect.width));
-    const maxScroll = row.scrollWidth - row.clientWidth;
-    row.scrollLeft = Math.round(ratio * maxScroll);
-    updateHScrollUi();
-  }
-
   return (
     <div className="mt-1.5">
       <div className="mb-1.5 flex items-center justify-between gap-3">
@@ -119,33 +93,70 @@ export function EmojiPickerPanel({
           disabled && "pointer-events-none opacity-50"
         )}
       >
-        {/* Single horizontal line of every sticker */}
+        {/* Category chips — horizontally scrollable on narrow screens. */}
         <div
-          ref={rowRef}
-          role="group"
-          aria-label="Desk stickers"
-          onScroll={updateHScrollUi}
+          role="tablist"
+          aria-label="Sticker categories"
           className={cn(
-            "scrollbar-none flex flex-nowrap gap-1.5 overflow-x-auto px-2 py-2",
+            "scrollbar-none flex flex-nowrap gap-1 overflow-x-auto border-b border-rose-100/80 bg-rose-50/80 px-2 py-1.5",
             "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           )}
         >
-          {emoji.map((e) => {
+          {tabs.map((c) => {
+            const selected = c.id === activeId;
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setActiveId(c.id)}
+                disabled={disabled}
+                className={cn(
+                  "shrink-0 rounded-full px-3 py-1 text-[11px] font-medium tracking-wide transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200",
+                  selected
+                    ? "bg-rose-400/90 text-white shadow-sm"
+                    : "bg-white/70 text-plum-300 hover:bg-white hover:text-plum-500"
+                )}
+              >
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Wrapped grid for the active category — everything visible at once. */}
+        <div
+          role="tabpanel"
+          aria-label={`${tabs.find((c) => c.id === activeId)?.label ?? ""} stickers`}
+          className="flex flex-wrap gap-1.5 px-2 py-2"
+        >
+          {active.map((e) => {
             const label = e.name ?? e.cp;
             return (
               <button
                 key={e.cp}
                 type="button"
-                title={`${label} (${e.cp})`}
+                title={`${label} (${e.cp})${e.animated ? " — animates on the desk" : ""}`}
                 onClick={() => insert(e.char)}
                 disabled={disabled}
                 className={cn(
-                  "flex h-[3.25rem] w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-rose-100/70 bg-white/70 px-0.5 py-1",
+                  "relative flex h-[3.25rem] w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-rose-100/70 bg-white/70 px-0.5 py-1",
                   "transition-all hover:border-rose-200/80 hover:bg-white hover:shadow-sm",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200",
                   e.mdi && "font-mdi"
                 )}
               >
+                {e.animated ? (
+                  <span
+                    aria-hidden="true"
+                    title="Animates on the desk"
+                    className="absolute right-1 top-0.5 text-[8px] leading-none text-rose-300"
+                  >
+                    ✦
+                  </span>
+                ) : null}
                 <span
                   aria-hidden="true"
                   className="text-xl leading-none text-plum-500"
@@ -159,28 +170,6 @@ export function EmojiPickerPanel({
             );
           })}
         </div>
-
-        {/* Horizontal scroll slider under the row (only when the row overflows). */}
-        {scrollUi.canScroll ? (
-          <div className="border-t border-rose-100/80 bg-rose-50/80 px-2 py-2">
-            <div
-              role="presentation"
-              className="relative h-2 w-full cursor-pointer rounded-full bg-rose-100/90 touch-none"
-              onPointerDown={onTrackPointerDown}
-            >
-              <div
-                className="pointer-events-none absolute top-0 h-full rounded-full bg-rose-400/90 shadow-sm transition-[width,left] duration-75 ease-out"
-                style={{
-                  width: `${scrollUi.thumbW}%`,
-                  left: `${scrollUi.thumbLeft}%`,
-                }}
-              />
-            </div>
-            <p className="mt-1.5 text-center text-[9px] font-medium uppercase tracking-wider text-plum-300">
-              Swipe the row or tap the bar to move
-            </p>
-          </div>
-        ) : null}
       </div>
     </div>
   );

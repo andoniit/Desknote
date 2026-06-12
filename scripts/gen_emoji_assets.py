@@ -136,6 +136,37 @@ MDI_NAMES: dict[int, str] = {
     0xF15C9: "dancer",
 }
 
+# Picker categories (web UI only — the desk renders everything the same).
+# Ids are emitted into supported.gen.ts; labels/order live in the picker
+# component. Anything unlisted falls back to "fun".
+EMOJI_CATEGORY: dict[int, str] = {
+    # love
+    0xF02D2: "love", 0xF02D1: "love", 0xF0BE3: "love", 0xF10F1: "love",
+    0xF1211: "love", 0xF0A56: "love", 0xF05F6: "love", 0xF0C72: "love",
+    # spicy / date night
+    0xF07B2: "spicy", 0xF13B5: "spicy", 0xF0FD4: "spicy", 0xF0876: "spicy",
+    0xF0356: "spicy", 0xF1042: "spicy", 0xF05E2: "spicy", 0xF0828: "spicy",
+    0xF15FB: "spicy", 0xF15C9: "spicy",
+    # faces
+    0xF0C6D: "faces", 0xF0C78: "faces", 0xF01F9: "faces", 0xF0C74: "faces",
+    0xF01F7: "faces",
+    # animals
+    0xF0FA1: "animals", 0xF0A43: "animals", 0xF011B: "animals",
+    0xF07C6: "animals", 0xF15C6: "animals", 0xF1589: "animals",
+    0xF03E9: "animals", 0xF18FB: "animals",
+    # nature
+    0xF024A: "nature", 0xF1C73: "nature", 0xF0592: "nature", 0xF05A8: "nature",
+    0xF059A: "nature", 0xF0D08: "nature", 0xF0594: "nature", 0xF0717: "nature",
+    0xF0238: "nature", 0xF054A: "nature",
+    # food & drink
+    0xF0198: "food", 0xF00EB: "food", 0xF0176: "food", 0xF0409: "food",
+    # everyday
+    0xF01C1: "everyday", 0xF0973: "everyday", 0xF1818: "everyday",
+    0xF001D: "everyday", 0xF06E8: "everyday",
+    # fun (also the fallback): star, gift, balloon, 1-up, alien, game, movie,
+    # film, music, sticker, palette, rocket, ghost
+}
+
 # Animated glyphs: extra frames the firmware ping-pongs through
 # (base -> f1 -> f2 -> f1 -> base ...). Transforms are applied at render time:
 #   scale — glyph shrinks toward center (pulse / heartbeat / flicker)
@@ -415,6 +446,8 @@ def main() -> None:
         "  mdi?: boolean;",
         "  /** True when the desk animates this emoji (pulse/wiggle/bounce). */",
         "  animated?: boolean;",
+        "  /** Picker category id (label/order defined in the picker UI). */",
+        "  category: string;",
         "};",
         "",
         "export const SUPPORTED_EMOJI: SupportedEmoji[] = [",
@@ -434,6 +467,7 @@ def main() -> None:
             bits.append("mdi: true")
         if cp in ANIMATIONS:
             bits.append("animated: true")
+        bits.append(f"category: {json.dumps(EMOJI_CATEGORY.get(cp, 'fun'))}")
         ts_lines.append("  { " + ", ".join(bits) + " },")
     ts_lines.append("];")
     ts_lines.append("")
