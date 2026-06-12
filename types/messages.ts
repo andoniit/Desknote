@@ -1,5 +1,5 @@
 /** Stored in `public.messages.message_type` */
-export type DeskMessageType = "standard" | "quick_send" | "system";
+export type DeskMessageType = "standard" | "quick_send" | "system" | "secret";
 
 /** Row shape for `public.messages` (PostgREST / Supabase). */
 export type DeskMessageRow = {

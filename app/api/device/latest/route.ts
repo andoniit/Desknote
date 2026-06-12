@@ -38,13 +38,14 @@ export async function GET(request: Request) {
       .select("display_name")
       .eq("id", ownerId)
       .maybeSingle(),
+    // Embed the linked message rows so secret one-time notes can be skipped:
+    // a secret must never resurface as the idle hero after the desk reboots.
     auth.supabase
       .from("notes")
-      .select("body")
+      .select("body, messages(message_type)")
       .eq("recipient_id", ownerId)
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .limit(10),
     auth.supabase
       .from("notes")
       .select("id, body, created_at, status")
@@ -66,8 +67,11 @@ export async function GET(request: Request) {
 
   const desk = deskRes.data;
   const owner = ownerRes.data;
+  const lastNonSecret = (lastNoteRes.data ?? []).find(
+    (n) => !(n.messages ?? []).some((m) => m.message_type === "secret")
+  );
   const lastBody =
-    typeof lastNoteRes.data?.body === "string" ? lastNoteRes.data.body : null;
+    typeof lastNonSecret?.body === "string" ? lastNonSecret.body : null;
 
   const payload: Record<string, unknown> = {};
 

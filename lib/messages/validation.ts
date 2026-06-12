@@ -20,5 +20,5 @@ export function validateDeskMessageContent(raw: string): {
 }
 
 export function isDeskMessageType(v: string): v is DeskMessageType {
-  return v === "standard" || v === "quick_send" || v === "system";
+  return v === "standard" || v === "quick_send" || v === "system" || v === "secret";
 }

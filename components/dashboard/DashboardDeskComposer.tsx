@@ -30,6 +30,7 @@ export function DashboardDeskComposer({
   const { push } = useDeskToast();
   const [body, setBody] = useState("");
   const [messageType, setMessageType] = useState<DeskMessageType>("standard");
+  const [isSecret, setIsSecret] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
     () => devices[0]?.id ?? ""
   );
@@ -54,7 +55,7 @@ export function DashboardDeskComposer({
       const result = await sendDeskMessages({
         content: trimmed,
         toDeviceIds,
-        messageType,
+        messageType: isSecret ? "secret" : messageType,
       });
 
       if (!result.ok) {
@@ -64,6 +65,7 @@ export function DashboardDeskComposer({
 
       setBody("");
       setMessageType("standard");
+      setIsSecret(false);
       push(result.toast);
     });
   }
@@ -120,6 +122,30 @@ export function DashboardDeskComposer({
           valueLength={body.length}
           disabled={isPending}
         />
+
+        <label
+          className={cn(
+            "mt-4 flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors",
+            isSecret
+              ? "border-plum-300 bg-plum-500/5"
+              : "border-ash-200/60 bg-white/60 hover:border-plum-200"
+          )}
+        >
+          <input
+            type="checkbox"
+            checked={isSecret}
+            onChange={(e) => setIsSecret(e.target.checked)}
+            disabled={isPending}
+            className="mt-0.5 h-4 w-4 cursor-pointer accent-current"
+          />
+          <span className="text-sm leading-snug">
+            <span className="font-medium">Send as a secret note</span>
+            <span className="block text-xs text-plum-200">
+              Arrives hidden on the desk — tap to reveal, tap again and it&apos;s
+              gone forever.
+            </span>
+          </span>
+        </label>
 
         <div className="mt-5 space-y-3">
           <div>
