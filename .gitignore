@@ -33,9 +33,19 @@ yarn-error.log*
 .env*.local
 .env.production
 
+# desknote secrets / local state (keep credentials out of the repo)
+firmware/*/secrets.h
+/.cache/
+supabase/.temp/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 
 # vercel
 .vercel
+docs/mqtt-push-setup.md
+firmware/desknote_main/desknote_main.ino
+firmware/desknote_mqtt/desknote_mqtt.ino
+scripts/gen_emoji_assets.py
+scripts/gen_emoji_assets.py
