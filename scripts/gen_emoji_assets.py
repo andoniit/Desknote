@@ -122,6 +122,18 @@ MDI_NAMES: dict[int, str] = {
     0xF18FB: "teddy",
     0xF0FCE: "movie",
     0xF0297: "game",
+    0xF07B2: "chili",
+    0xF13B5: "lipstick",
+    0xF0FD4: "bed",
+    0xF0876: "wine",
+    0xF0356: "cocktail",
+    0xF1042: "cherries",
+    0xF05E2: "candle",
+    0xF0A56: "hearts",
+    0xF05F6: "heartbeat",
+    0xF0828: "hot-tub",
+    0xF15FB: "dance",
+    0xF15C9: "dancer",
 }
 
 # Animated glyphs: extra frames the firmware ping-pongs through
@@ -146,6 +158,14 @@ ANIMATIONS: dict[int, list[dict]] = {
     0xF0387: BOUNCE,  # music note
     0xF0A26: BOUNCE,  # balloon — float
     0xF14DE: BOUNCE,  # rocket
+    0xF07B2: WIGGLE,  # chili — too hot to sit still
+    0xF13B5: PULSE,   # lipstick
+    0xF1042: BOUNCE,  # cherries
+    0xF05E2: PULSE,   # candle — flicker
+    0xF0A56: PULSE,   # heart-multiple
+    0xF05F6: PULSE,   # heart-pulse — literal heartbeat
+    0xF15FB: WIGGLE,  # ballroom dance
+    0xF15C9: WIGGLE,  # dancer
 }
 
 
