@@ -30,7 +30,7 @@ export async function POST(request: Request) {
 
   const { data: note, error: fetchErr } = await auth.supabase
     .from("notes")
-    .select("id, recipient_id")
+    .select("id, recipient_id, created_at")
     .eq("id", noteId)
     .maybeSingle();
 
@@ -53,6 +53,20 @@ export async function POST(request: Request) {
 
   if (updateErr) {
     return NextResponse.json({ error: "update_failed", detail: updateErr.message }, { status: 500 });
+  }
+
+  // Retire any OLDER notes still queued for this recipient. The desk just saw
+  // a newer message, so an older queued note is stale — without this it would
+  // resurface as the "newest queued" note after a reboot and hijack the
+  // screen with old content (e.g. notes delivered while a desk was running
+  // firmware that never called /seen).
+  if (note.created_at) {
+    await auth.supabase
+      .from("notes")
+      .update({ status: "seen" })
+      .eq("recipient_id", auth.ownerId)
+      .eq("status", "queued")
+      .lt("created_at", note.created_at);
   }
 
   const fwHeader = request.headers.get("x-firmware-version")?.trim().slice(0, 32);
