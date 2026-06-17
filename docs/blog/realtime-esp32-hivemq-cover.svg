@@ -1,0 +1,112 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="glow" cx="0.5" cy="0.48" r="0.62">
+      <stop offset="0" stop-color="#ffd766" stop-opacity="0.85"/>
+      <stop offset="0.38" stop-color="#ffc24d" stop-opacity="0.45"/>
+      <stop offset="0.7" stop-color="#9fe8c4" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blob" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="46"/>
+    </filter>
+  </defs>
+
+  <!-- light background -->
+  <rect width="1200" height="630" fill="#fbfaf7"/>
+
+  <!-- soft center glow + side blobs -->
+  <ellipse cx="600" cy="300" rx="520" ry="300" fill="url(#glow)"/>
+  <ellipse cx="180" cy="520" rx="220" ry="160" fill="#3ecf8e" opacity="0.10" filter="url(#blob)"/>
+  <ellipse cx="1030" cy="120" rx="220" ry="150" fill="#ffc000" opacity="0.12" filter="url(#blob)"/>
+
+  <!-- thin circuit traces, top-left -->
+  <g stroke="#b9b2c8" stroke-width="2" fill="none" opacity="0.7">
+    <path d="M 60 120 H 250 L 310 180"/>
+    <path d="M 60 170 H 200 L 244 214"/>
+  </g>
+  <g fill="#b9b2c8" opacity="0.8">
+    <circle cx="313" cy="183" r="5"/>
+    <circle cx="247" cy="217" r="5"/>
+    <circle cx="60" cy="120" r="4"/>
+    <circle cx="60" cy="170" r="4"/>
+  </g>
+
+  <!-- thin circuit traces, bottom-right -->
+  <g stroke="#b9b2c8" stroke-width="2" fill="none" opacity="0.7">
+    <path d="M 1140 510 H 950 L 890 450"/>
+    <path d="M 1140 460 H 1000 L 956 416"/>
+  </g>
+  <g fill="#b9b2c8" opacity="0.8">
+    <circle cx="887" cy="447" r="5"/>
+    <circle cx="953" cy="413" r="5"/>
+    <circle cx="1140" cy="510" r="4"/>
+    <circle cx="1140" cy="460" r="4"/>
+  </g>
+
+  <!-- dot grid, top-right -->
+  <g fill="#1d1a26" opacity="0.85">
+    <g id="dg">
+      <circle cx="0" cy="0" r="3.2"/><circle cx="22" cy="0" r="3.2"/><circle cx="44" cy="0" r="3.2"/><circle cx="66" cy="0" r="3.2"/>
+    </g>
+    <use href="#dg" x="1078" y="64"/>
+    <use href="#dg" x="1100" y="86"/>
+    <use href="#dg" x="1078" y="108"/>
+    <use href="#dg" x="1100" y="130"/>
+  </g>
+
+  <!-- dot grid, bottom-left -->
+  <g fill="#1d1a26" opacity="0.85">
+    <use href="#dg" x="56" y="500"/>
+    <use href="#dg" x="78" y="522"/>
+    <use href="#dg" x="56" y="544"/>
+    <use href="#dg" x="78" y="566"/>
+  </g>
+
+  <!-- ============ CENTER LOCKUP: Supabase x HiveMQ x ESP32 ============ -->
+
+  <!-- Supabase mark (simplified bolt) + wordmark -->
+  <g transform="translate(206,262)">
+    <g transform="translate(0,6)">
+      <path d="M 38 0 L 8 44 H 30 L 24 76 L 58 30 H 34 Z" fill="#3ecf8e"/>
+      <path d="M 38 0 L 8 44 H 30 L 28 56 L 14 44 Z" fill="#2fae75" opacity="0.55"/>
+    </g>
+    <text x="78" y="56" font-family="'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="40" font-weight="700" fill="#1d1a26">Supabase</text>
+  </g>
+
+  <!-- separator -->
+  <text x="512" y="318" font-family="'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="30" font-weight="400" fill="#8a8496" text-anchor="middle">&#10005;</text>
+
+  <!-- HiveMQ mark (hexagon) + wordmark -->
+  <g transform="translate(556,262)">
+    <g transform="translate(36,44)">
+      <polygon points="0,-42 36,-21 36,21 0,42 -36,21 -36,-21" fill="#ffc000"/>
+      <polygon points="0,-26 22,-13 22,13 0,26 -22,13 -22,-13" fill="#fbfaf7"/>
+      <polygon points="0,-12 10,-6 10,6 0,12 -10,6 -10,-6" fill="#ffc000"/>
+    </g>
+    <text x="86" y="56" font-family="'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="40" font-weight="700" fill="#1d1a26">HiveMQ</text>
+  </g>
+
+  <!-- separator -->
+  <text x="836" y="318" font-family="'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="30" font-weight="400" fill="#8a8496" text-anchor="middle">&#10005;</text>
+
+  <!-- ESP32 mark (chip) + wordmark -->
+  <g transform="translate(878,262)">
+    <g transform="translate(4,12)">
+      <!-- pins -->
+      <g stroke="#1d1a26" stroke-width="4" stroke-linecap="round">
+        <line x1="10" y1="-8" x2="10" y2="2"/><line x1="28" y1="-8" x2="28" y2="2"/><line x1="46" y1="-8" x2="46" y2="2"/>
+        <line x1="10" y1="54" x2="10" y2="64"/><line x1="28" y1="54" x2="28" y2="64"/><line x1="46" y1="54" x2="46" y2="64"/>
+        <line x1="-8" y1="10" x2="2" y2="10"/><line x1="-8" y1="28" x2="2" y2="28"/><line x1="-8" y1="46" x2="2" y2="46"/>
+        <line x1="54" y1="10" x2="64" y2="10"/><line x1="54" y1="28" x2="64" y2="28"/><line x1="54" y1="46" x2="64" y2="46"/>
+      </g>
+      <rect x="0" y="0" width="56" height="56" rx="10" fill="#1d1a26"/>
+      <circle cx="28" cy="28" r="13" fill="none" stroke="#fbfaf7" stroke-width="3.5"/>
+      <circle cx="28" cy="28" r="4" fill="#fbfaf7"/>
+    </g>
+    <text x="86" y="56" font-family="'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="40" font-weight="700" fill="#1d1a26">ESP32</text>
+  </g>
+
+  <!-- subtle dotted flow line under the lockup -->
+  <path d="M 280 392 C 420 422, 780 422, 920 392" fill="none" stroke="#1d1a26" stroke-width="2.5" stroke-dasharray="1 12" stroke-linecap="round" opacity="0.35"/>
+  <text x="600" y="448" font-family="Menlo, Consolas, monospace" font-size="17" fill="#6e6880" text-anchor="middle" letter-spacing="4">REALTIME PUSH &#183; ZERO POLLING</text>
+</svg>
