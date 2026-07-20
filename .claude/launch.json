@@ -1,0 +1,44 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "memorypin-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/andon/Documents/coding-projects/memorypin",
+        "run",
+        "dev"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "mfolio-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/andon/Documents/Pot-deepa+me/mfolio",
+        "run",
+        "dev"
+      ],
+      "port": 3002
+    },
+    {
+      "name": "scribble-it",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/andon/Documents/coding-projects/scribble-it/server.js"],
+      "port": 3010
+    },
+    {
+      "name": "viewer",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/andon/Documents/coding-projects/memorypin",
+        "run",
+        "dev"
+      ],
+      "port": 3005
+    }
+  ]
+}
