@@ -1,0 +1,506 @@
+[
+  {
+    "char": "󰱲",
+    "cp": "U+F0C72",
+    "name": "kiss",
+    "mdi": true,
+    "animated": true,
+    "category": "love"
+  },
+  {
+    "char": "󰱭",
+    "cp": "U+F0C6D",
+    "name": "cry",
+    "mdi": true,
+    "animated": false,
+    "category": "faces"
+  },
+  {
+    "char": "󰇷",
+    "cp": "U+F01F7",
+    "name": "poop",
+    "mdi": true,
+    "animated": false,
+    "category": "faces"
+  },
+  {
+    "char": "󰱸",
+    "cp": "U+F0C78",
+    "name": "wink",
+    "mdi": true,
+    "animated": false,
+    "category": "faces"
+  },
+  {
+    "char": "󰇹",
+    "cp": "U+F01F9",
+    "name": "tongue",
+    "mdi": true,
+    "animated": false,
+    "category": "faces"
+  },
+  {
+    "char": "󰱴",
+    "cp": "U+F0C74",
+    "name": "neutral",
+    "mdi": true,
+    "animated": false,
+    "category": "faces"
+  },
+  {
+    "char": "󰋒",
+    "cp": "U+F02D2",
+    "name": "heart",
+    "mdi": true,
+    "animated": true,
+    "category": "love"
+  },
+  {
+    "char": "󰯣",
+    "cp": "U+F0BE3",
+    "name": "you",
+    "mdi": true,
+    "animated": false,
+    "category": "love"
+  },
+  {
+    "char": "󱃱",
+    "cp": "U+F10F1",
+    "name": "hug",
+    "mdi": true,
+    "animated": true,
+    "category": "love"
+  },
+  {
+    "char": "󱈑",
+    "cp": "U+F1211",
+    "name": "battery",
+    "mdi": true,
+    "animated": false,
+    "category": "love"
+  },
+  {
+    "char": "󰉊",
+    "cp": "U+F024A",
+    "name": "flower",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󱱳",
+    "cp": "U+F1C73",
+    "name": "tree",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󰖒",
+    "cp": "U+F0592",
+    "name": "rain",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󰖨",
+    "cp": "U+F05A8",
+    "name": "sun",
+    "mdi": true,
+    "animated": true,
+    "category": "nature"
+  },
+  {
+    "char": "󰖚",
+    "cp": "U+F059A",
+    "name": "dusk",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󰴈",
+    "cp": "U+F0D08",
+    "name": "poppy",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󰾡",
+    "cp": "U+F0FA1",
+    "name": "bee",
+    "mdi": true,
+    "animated": true,
+    "category": "animals"
+  },
+  {
+    "char": "󰩃",
+    "cp": "U+F0A43",
+    "name": "dog",
+    "mdi": true,
+    "animated": false,
+    "category": "animals"
+  },
+  {
+    "char": "󰄛",
+    "cp": "U+F011B",
+    "name": "cat",
+    "mdi": true,
+    "animated": false,
+    "category": "animals"
+  },
+  {
+    "char": "󰟆",
+    "cp": "U+F07C6",
+    "name": "elephant",
+    "mdi": true,
+    "animated": false,
+    "category": "animals"
+  },
+  {
+    "char": "󰇁",
+    "cp": "U+F01C1",
+    "name": "usd",
+    "mdi": true,
+    "animated": false,
+    "category": "everyday"
+  },
+  {
+    "char": "󰏘",
+    "cp": "U+F03D8",
+    "name": "palette",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰞅",
+    "cp": "U+F0785",
+    "name": "sticker",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰆘",
+    "cp": "U+F0198",
+    "name": "cookie",
+    "mdi": true,
+    "animated": false,
+    "category": "food"
+  },
+  {
+    "char": "󰮭",
+    "cp": "U+F0BAD",
+    "name": "1-up",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰯉",
+    "cp": "U+F0BC9",
+    "name": "alien",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󱠘",
+    "cp": "U+F1818",
+    "name": "bath",
+    "mdi": true,
+    "animated": false,
+    "category": "everyday"
+  },
+  {
+    "char": "󰎇",
+    "cp": "U+F0387",
+    "name": "music",
+    "mdi": true,
+    "animated": true,
+    "category": "fun"
+  },
+  {
+    "char": "󰥳",
+    "cp": "U+F0973",
+    "name": "om",
+    "mdi": true,
+    "animated": false,
+    "category": "everyday"
+  },
+  {
+    "char": "󰋑",
+    "cp": "U+F02D1",
+    "name": "heart-line",
+    "mdi": true,
+    "animated": true,
+    "category": "love"
+  },
+  {
+    "char": "󰨜",
+    "cp": "U+F0A1C",
+    "name": "vintage",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰓎",
+    "cp": "U+F04CE",
+    "name": "star",
+    "mdi": true,
+    "animated": true,
+    "category": "fun"
+  },
+  {
+    "char": "󰅶",
+    "cp": "U+F0176",
+    "name": "coffee",
+    "mdi": true,
+    "animated": false,
+    "category": "food"
+  },
+  {
+    "char": "󰃫",
+    "cp": "U+F00EB",
+    "name": "cake",
+    "mdi": true,
+    "animated": false,
+    "category": "food"
+  },
+  {
+    "char": "󰊡",
+    "cp": "U+F02A1",
+    "name": "gift",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰨦",
+    "cp": "U+F0A26",
+    "name": "balloon",
+    "mdi": true,
+    "animated": true,
+    "category": "fun"
+  },
+  {
+    "char": "󰖔",
+    "cp": "U+F0594",
+    "name": "moon",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󰈸",
+    "cp": "U+F0238",
+    "name": "fire",
+    "mdi": true,
+    "animated": true,
+    "category": "nature"
+  },
+  {
+    "char": "󰐉",
+    "cp": "U+F0409",
+    "name": "pizza",
+    "mdi": true,
+    "animated": false,
+    "category": "food"
+  },
+  {
+    "char": "󰏩",
+    "cp": "U+F03E9",
+    "name": "paw",
+    "mdi": true,
+    "animated": false,
+    "category": "animals"
+  },
+  {
+    "char": "󰀝",
+    "cp": "U+F001D",
+    "name": "plane",
+    "mdi": true,
+    "animated": false,
+    "category": "everyday"
+  },
+  {
+    "char": "󰕊",
+    "cp": "U+F054A",
+    "name": "umbrella",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󰊠",
+    "cp": "U+F02A0",
+    "name": "ghost",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰛨",
+    "cp": "U+F06E8",
+    "name": "bulb",
+    "mdi": true,
+    "animated": false,
+    "category": "everyday"
+  },
+  {
+    "char": "󱓞",
+    "cp": "U+F14DE",
+    "name": "rocket",
+    "mdi": true,
+    "animated": true,
+    "category": "fun"
+  },
+  {
+    "char": "󰜗",
+    "cp": "U+F0717",
+    "name": "snowflake",
+    "mdi": true,
+    "animated": false,
+    "category": "nature"
+  },
+  {
+    "char": "󱖉",
+    "cp": "U+F1589",
+    "name": "butterfly",
+    "mdi": true,
+    "animated": true,
+    "category": "animals"
+  },
+  {
+    "char": "󱗆",
+    "cp": "U+F15C6",
+    "name": "bird",
+    "mdi": true,
+    "animated": false,
+    "category": "animals"
+  },
+  {
+    "char": "󱣻",
+    "cp": "U+F18FB",
+    "name": "teddy",
+    "mdi": true,
+    "animated": false,
+    "category": "animals"
+  },
+  {
+    "char": "󰿎",
+    "cp": "U+F0FCE",
+    "name": "movie",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰊗",
+    "cp": "U+F0297",
+    "name": "game",
+    "mdi": true,
+    "animated": false,
+    "category": "fun"
+  },
+  {
+    "char": "󰞲",
+    "cp": "U+F07B2",
+    "name": "chili",
+    "mdi": true,
+    "animated": true,
+    "category": "spicy"
+  },
+  {
+    "char": "󱎵",
+    "cp": "U+F13B5",
+    "name": "lipstick",
+    "mdi": true,
+    "animated": true,
+    "category": "spicy"
+  },
+  {
+    "char": "󰿔",
+    "cp": "U+F0FD4",
+    "name": "bed",
+    "mdi": true,
+    "animated": false,
+    "category": "spicy"
+  },
+  {
+    "char": "󰡶",
+    "cp": "U+F0876",
+    "name": "wine",
+    "mdi": true,
+    "animated": false,
+    "category": "spicy"
+  },
+  {
+    "char": "󰍖",
+    "cp": "U+F0356",
+    "name": "cocktail",
+    "mdi": true,
+    "animated": false,
+    "category": "spicy"
+  },
+  {
+    "char": "󱁂",
+    "cp": "U+F1042",
+    "name": "cherries",
+    "mdi": true,
+    "animated": true,
+    "category": "spicy"
+  },
+  {
+    "char": "󰗢",
+    "cp": "U+F05E2",
+    "name": "candle",
+    "mdi": true,
+    "animated": true,
+    "category": "spicy"
+  },
+  {
+    "char": "󰩖",
+    "cp": "U+F0A56",
+    "name": "hearts",
+    "mdi": true,
+    "animated": true,
+    "category": "love"
+  },
+  {
+    "char": "󰗶",
+    "cp": "U+F05F6",
+    "name": "heartbeat",
+    "mdi": true,
+    "animated": true,
+    "category": "love"
+  },
+  {
+    "char": "󰠨",
+    "cp": "U+F0828",
+    "name": "hot-tub",
+    "mdi": true,
+    "animated": false,
+    "category": "spicy"
+  },
+  {
+    "char": "󱗻",
+    "cp": "U+F15FB",
+    "name": "dance",
+    "mdi": true,
+    "animated": true,
+    "category": "spicy"
+  },
+  {
+    "char": "󱗉",
+    "cp": "U+F15C9",
+    "name": "dancer",
+    "mdi": true,
+    "animated": true,
+    "category": "spicy"
+  }
+]

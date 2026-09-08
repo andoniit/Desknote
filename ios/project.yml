@@ -1,0 +1,173 @@
+name: DeskNote
+configs:
+  Debug: debug
+  Release: release
+
+# Bump MARKETING_VERSION for a user-visible release; CURRENT_PROJECT_VERSION
+# must increase on every single upload, or App Store Connect rejects it.
+settings:
+  base:
+    DEVELOPMENT_TEAM: VG2N3XUNXB
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+options:
+  bundleIdPrefix: space.desknote
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    from: "2.0.0"
+
+# Sources/Shared is compiled into both the app and the widget: the
+# Supabase client, the row types, the design tokens, and the "what is on
+# the desk" read. Sources/App and Sources/Widget belong to one each.
+targets:
+  DeskNote:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/Shared
+      - path: Sources/App
+      - path: Resources
+        buildPhase: resources
+      # An Icon Composer bundle, not a folder of loose files — `type: file`
+      # keeps it one reference so actool compiles it as an icon.
+      - path: DeskNote.icon
+        type: file
+        buildPhase: resources
+    dependencies:
+      - package: Supabase
+        product: Supabase
+      - target: DeskNoteWidget
+      - target: DeskNoteNotification
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: DeskNote
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Only standard HTTPS/TLS, which is exempt — without this every
+        # TestFlight build stalls on the export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIAppFonts:
+          - materialdesignicons-webfont.ttf
+        # Tapping the widget opens desknote://desk?device=<uuid>.
+        CFBundleURLTypes:
+          - CFBundleURLName: space.desknote.app
+            CFBundleURLSchemes:
+              - desknote
+    # Without this XcodeGen writes no shared scheme, and xcodebuild then
+    # reports "supported platforms ... is empty" and finds no destinations.
+    scheme:
+      configVariants: []
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: space.desknote.app
+        ASSETCATALOG_COMPILER_APPICON_NAME: DeskNote
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: DeskNote.entitlements
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+      # `aps-environment` in DeskNote.entitlements reads this. A debug
+      # build's APNs token only exists on the sandbox host and a
+      # TestFlight build's only on production, so the two must not be
+      # mixed up — `push_tokens.environment` records which one a phone
+      # registered with.
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
+
+  DeskNoteWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/Shared
+      - path: Sources/Widget
+      # Bundle.main is the *extension's* bundle, so the widget needs its
+      # own copy of supabase.json and the icon font.
+      - path: Resources
+        buildPhase: resources
+    dependencies:
+      - package: Supabase
+        product: Supabase
+    info:
+      path: WidgetInfo.plist
+      properties:
+        CFBundleDisplayName: On the desk
+        # An extension's versions must match its host app's exactly or the
+        # App Store rejects the upload.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        UIAppFonts:
+          - materialdesignicons-webfont.ttf
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: space.desknote.app.widget
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: DeskNoteWidget.entitlements
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        SKIP_INSTALL: YES
+
+  # What a push turns into when it is pulled down: the paper-note card in
+  # Sources/Notification, instead of two lines of system text.
+  DeskNoteNotification:
+    type: app-extension
+    platform: iOS
+    sources:
+      # Only the design tokens and the "3m ago" helper. A content
+      # extension gets a tight memory budget and has nothing to fetch —
+      # everything it draws arrives in the payload — so it does not link
+      # Supabase the way the other two targets do.
+      - path: Sources/Shared/Design/Palette.swift
+      - path: Sources/Shared/Model/RelativeTime.swift
+      - path: Sources/Notification
+    # Swift's autolinking does not pull these in from `import` alone, and
+    # without UserNotificationsUI the extension launches, fails to find
+    # `_UNNotificationContentExtensionVendorContext`, and shows a blank
+    # sheet instead of the card.
+    dependencies:
+      - sdk: UserNotifications.framework
+      - sdk: UserNotificationsUI.framework
+    info:
+      path: NotificationInfo.plist
+      properties:
+        CFBundleDisplayName: On your desk
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.content-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationViewController
+          NSExtensionAttributes:
+            # Must match the `category` the Edge Function puts in the
+            # payload and the one the app registers.
+            UNNotificationExtensionCategory: DESK_NOTE
+            UNNotificationExtensionInitialContentSizeRatio: 0.9
+            # The card says everything the banner would; showing both
+            # would print the same line twice.
+            UNNotificationExtensionDefaultContentHidden: true
+            UNNotificationExtensionUserInteractionEnabled: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: space.desknote.app.notification
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        SKIP_INSTALL: YES

@@ -6,6 +6,17 @@ Ready to deploy on Vercel.
 
 > Two desks. One conversation.
 
+## Two clients, one backend
+
+| Client | Lives in | Built with |
+| ------ | -------- | ---------- |
+| Web    | repo root (`app/`, `components/`, `lib/`) | Next.js 15, deployed on Vercel |
+| iOS    | [`ios/`](ios/README.md) | SwiftUI + supabase-swift, built with XcodeGen |
+
+The two are separate builds that share one Supabase project — neither
+imports from the other. See [`ios/README.md`](ios/README.md) for how each
+server action is ported to the app.
+
 ## Features
 
 - Email + six-digit PIN auth via Supabase passwords (`/login`; `/auth/callback` if email confirmation is on)
@@ -27,6 +38,7 @@ Ready to deploy on Vercel.
 | Auth + DB   | Supabase (`@supabase/ssr`)                 |
 | Fonts       | Inter + Fraunces (next/font)               |
 | Deployment  | Vercel                                     |
+| iOS app     | SwiftUI + supabase-swift (`ios/`)          |
 
 ## Project structure
 
@@ -66,6 +78,7 @@ Ready to deploy on Vercel.
 ├── public/
 │   ├── icons/                     # PNG/SVG icons (`npm run generate:icons`)
 │   └── splash/                    # Apple startup images
+├── ios/                           # Native SwiftUI app (see ios/README.md)
 ├── types/database.ts              # Typed Supabase schema
 ├── middleware.ts                  # Auth guard for /dashboard, /devices
 ├── next.config.ts
