@@ -1,8 +1,11 @@
 # DeskNote push notifications (iOS)
 
-Status: **code complete, not yet provisioned** — the two Apple-side steps
-below (push capability + an APNs auth key) have to be done once before any
-phone is tapped on the shoulder.
+Status: **code complete, not yet provisioned.** Two things are outstanding
+and both need credentials rather than code: the App ID needs its push
+capability and an APNs auth key (step 1, Apple Developer account), and the
+Supabase CLI has to be logged into the account that owns project
+`lareedskrwqleutgyskf` (step 3). Until both are done, no phone is tapped on
+the shoulder.
 
 ```
 Phone A sends ──INSERT──▶ Supabase `messages` table
@@ -70,14 +73,21 @@ accounts, which RLS alone cannot express safely.
 | `APNS_BUNDLE_ID`   | `space.desknote.app` (the app, not the extensions)                |
 | `WEBHOOK_SECRET`   | The same one `mqtt-publish` already uses                          |
 
-The key is multi-line, so set it from a file rather than the command line:
+The key is multi-line, so it goes in from a file rather than the command
+line. `scripts/set-apns-secrets.sh` does the whole set — it reads the Key ID
+out of Apple's filename, builds a private temp env file, and deletes it
+again on the way out (including on Ctrl-C):
 
 ```sh
-printf 'APNS_KEY_ID=XXXXXXXXXX\nAPNS_TEAM_ID=VG2N3XUNXB\nAPNS_BUNDLE_ID=space.desknote.app\n' > /tmp/apns.env
-{ printf 'APNS_PRIVATE_KEY="'; sed -z 's/\n/\\n/g' AuthKey_XXXXXXXXXX.p8; printf '"\n'; } >> /tmp/apns.env
-supabase secrets set --env-file /tmp/apns.env
-rm /tmp/apns.env
+./scripts/set-apns-secrets.sh ~/Downloads/AuthKey_XXXXXXXXXX.p8
 ```
+
+Pass the Key ID as a second argument if the `.p8` has been renamed. The
+script never prints the key.
+
+Whether the value comes back from Supabase with real newlines or with the
+two characters `\` and `n` depends on how it was set; `pkcs8()` in the
+function strips both, so either is fine.
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are provided by the runtime;
 the function needs the service role because it reads the *recipient's*

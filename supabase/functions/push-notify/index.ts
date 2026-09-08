@@ -97,6 +97,10 @@ function pkcs8(pem: string): Uint8Array {
   const body = pem
     .replace(/-----BEGIN [^-]+-----/g, "")
     .replace(/-----END [^-]+-----/g, "")
+    // Depending on how the secret was set, the line breaks come back as
+    // real newlines or as the two characters a backslash and an n. Both
+    // have to go before the base64 will decode.
+    .replace(/\\n/g, "")
     .replace(/\s+/g, "");
   return Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
 }
