@@ -1,11 +1,14 @@
 # DeskNote push notifications (iOS)
 
-Status: **code complete, not yet provisioned.** Two things are outstanding
-and both need credentials rather than code: the App ID needs its push
-capability and an APNs auth key (step 1, Apple Developer account), and the
-Supabase CLI has to be logged into the account that owns project
-`lareedskrwqleutgyskf` (step 3). Until both are done, no phone is tapped on
-the shoulder.
+Status: **Supabase side provisioned; the webhook and Apple's capability are
+outstanding.** Steps 2 and 3 are done — `push_tokens` and
+`register_push_token` are on `lareedskrwqleutgyskf`, the four `APNS_*`
+secrets are set (Key ID `CZTN3TJ634`), and `push-notify` is deployed. What
+is left is step 4, the `messages-to-push` trigger, which needs the
+`WEBHOOK_SECRET` value that only lives in the Supabase vault, and step 1's
+first item: **Push Notifications** ticked on the `space.desknote.app` App
+ID. Until the trigger exists, nothing calls the function and no phone is
+tapped on the shoulder.
 
 ```
 Phone A sends ──INSERT──▶ Supabase `messages` table
