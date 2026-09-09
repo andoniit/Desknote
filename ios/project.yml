@@ -9,7 +9,7 @@ settings:
   base:
     DEVELOPMENT_TEAM: VG2N3XUNXB
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "2"
 
 options:
   bundleIdPrefix: space.desknote
