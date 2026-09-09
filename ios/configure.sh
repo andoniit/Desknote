@@ -10,13 +10,21 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ENV_FILE="${1:-../.env.local}"
 
-[ -f "$ENV_FILE" ] || { echo "no env file at $ENV_FILE"; exit 1; }
+# A checkout on a build machine has no .env.local — Xcode Cloud passes the
+# same two values as workflow environment variables instead. Same names, so
+# the fallback is only about where they are read from.
+if [ -f "$ENV_FILE" ]; then
+  SOURCE="$ENV_FILE"
+  get() { grep -E "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"'"'"' \r'; }
+else
+  SOURCE="the environment"
+  get() { printenv "$1" || true; }
+fi
 
-get() { grep -E "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"'"'"' \r'; }
 URL=$(get NEXT_PUBLIC_SUPABASE_URL)
 KEY=$(get NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)
 [ -n "$KEY" ] || KEY=$(get NEXT_PUBLIC_SUPABASE_ANON_KEY)
-[ -n "$URL" ] && [ -n "$KEY" ] || { echo "URL or key missing from $ENV_FILE"; exit 1; }
+[ -n "$URL" ] && [ -n "$KEY" ] || { echo "URL or key missing from $SOURCE"; exit 1; }
 
 mkdir -p Resources
 printf '{\n  "url": "%s",\n  "anonKey": "%s"\n}\n' "$URL" "$KEY" > Resources/supabase.json

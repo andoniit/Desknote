@@ -96,6 +96,30 @@ Two ports differ deliberately:
 `./release.sh --upload` also sends it. Every upload needs a build number App
 Store Connect has not seen before — see the header of the script.
 
+### Xcode Cloud
+
+Two of this project's build inputs are generated rather than committed:
+`DeskNote.xcodeproj` (XcodeGen) and `Resources/supabase.json`
+(`configure.sh`). A fresh clone has neither, which is why a cloud build
+fails immediately with *"Project DeskNote.xcodeproj does not exist at
+ios/DeskNote.xcodeproj"* — it never reaches the compiler.
+
+`ci_scripts/ci_post_clone.sh` rebuilds both. Xcode Cloud looks for that
+directory either at the repository root or beside the Xcode project
+depending on how the workflow was created, so `ios/ci_scripts/` holds a
+three-line forwarder to the same script and either location works.
+
+The workflow needs two environment variables, which is where
+`configure.sh` reads from when there is no `.env.local`:
+
+| Variable | Value |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://lareedskrwqleutgyskf.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | the same publishable key the web bundle ships |
+
+Neither needs to be marked secret — the web app already hands both to every
+visitor, and row level security is what protects the data.
+
 ## App icon
 
 `DeskNote.icon` is an Icon Composer bundle (Xcode 26+): a layer PNG plus
