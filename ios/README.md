@@ -120,6 +120,21 @@ The workflow needs two environment variables, which is where
 Neither needs to be marked secret — the web app already hands both to every
 visitor, and row level security is what protects the data.
 
+Xcode Cloud also resolves Swift packages with automatic resolution turned
+off, so it needs a `Package.resolved` and will not create one. That file
+normally lives inside the `.xcodeproj`, and git cannot track a file beneath
+an ignored directory — so the pinned copy sits at `ios/Package.resolved`
+and `ci_post_clone.sh` puts it where the resolver looks. After changing a
+dependency version in `project.yml`, resolve locally and copy it back:
+
+```bash
+cp ios/DeskNote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved ios/Package.resolved
+```
+
+Forgetting that pins the cloud build to the old version while local builds
+move on, which is the kind of drift that only shows up as a mystery
+failure much later.
+
 ## App icon
 
 `DeskNote.icon` is an Icon Composer bundle (Xcode 26+): a layer PNG plus

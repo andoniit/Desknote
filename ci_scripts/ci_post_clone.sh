@@ -30,4 +30,15 @@ echo "▸ writing Resources/supabase.json"
 echo "▸ generating DeskNote.xcodeproj"
 xcodegen generate
 
+# Xcode Cloud resolves packages with automatic resolution turned off, so it
+# needs a Package.resolved and will not create one. That file normally lives
+# inside the .xcodeproj, which is gitignored — and git cannot track a file
+# under an ignored directory — so the pinned copy is kept beside the project
+# and put into place here. Refresh it with the command in ios/README.md when
+# a dependency version changes.
+echo "▸ pinning package dependencies"
+SWIFTPM_DIR="DeskNote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
+mkdir -p "$SWIFTPM_DIR"
+cp Package.resolved "$SWIFTPM_DIR/Package.resolved"
+
 echo "▸ post-clone complete"
