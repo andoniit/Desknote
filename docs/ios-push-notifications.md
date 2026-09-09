@@ -1,14 +1,14 @@
 # DeskNote push notifications (iOS)
 
-Status: **Supabase side provisioned; the webhook and Apple's capability are
-outstanding.** Steps 2 and 3 are done — `push_tokens` and
-`register_push_token` are on `lareedskrwqleutgyskf`, the four `APNS_*`
-secrets are set (Key ID `CZTN3TJ634`), and `push-notify` is deployed. What
-is left is step 4, the `messages-to-push` trigger, which needs the
-`WEBHOOK_SECRET` value that only lives in the Supabase vault, and step 1's
-first item: **Push Notifications** ticked on the `space.desknote.app` App
-ID. Until the trigger exists, nothing calls the function and no phone is
-tapped on the shoulder.
+Status: **the backend is wired end to end; Apple's capability is
+outstanding.** `push_tokens` and `register_push_token` are on
+`lareedskrwqleutgyskf`, the four `APNS_*` secrets are set (Key ID
+`CZTN3TJ634`), `push-notify` is deployed, and the `messages-to-push`
+trigger fires on every insert. What is left is step 1's first item:
+**Push Notifications** ticked on the `space.desknote.app` App ID. Until
+that is done a device build will not sign with the `aps-environment`
+entitlement, so no phone ever registers a token and the function has
+nobody to deliver to.
 
 ```
 Phone A sends ──INSERT──▶ Supabase `messages` table
@@ -102,24 +102,27 @@ supabase functions deploy push-notify --no-verify-jwt
 
 ## 4. Database webhook
 
-A second trigger on the same table as the MQTT one:
+A second trigger on the same table as the MQTT one. Migration
+`20260909100000_messages_to_push_trigger.sql` creates it, so this needs no
+dashboard visit:
 
-```sql
-drop trigger if exists "messages-to-push" on public.messages;
-create trigger "messages-to-push"
-  after insert on public.messages for each row
-  execute function supabase_functions.http_request(
-    'https://lareedskrwqleutgyskf.supabase.co/functions/v1/push-notify',
-    'POST',
-    '{"Content-type":"application/json","x-webhook-secret":"<WEBHOOK_SECRET>"}',
-    '{}',
-    '5000'
-  );
+```sh
+supabase db push
 ```
 
-> Same dashboard gotcha as `mqtt-publish`: the header *name* and *value*
-> are two separate boxes, and pasting both into one silently produces a 401
-> on every call.
+The header has to carry `WEBHOOK_SECRET`, which lives in the Edge Function
+vault and cannot be read back out of it. Rather than ask for it a second
+time, the migration lifts the value from whichever trigger on `messages`
+already carries an `x-webhook-secret` header — the MQTT one — so the secret
+never leaves the database and never reaches a terminal. Rotating the secret
+means re-running the migration after the MQTT webhook has the new value.
+
+On a fresh project there is no MQTT webhook to copy from; the migration says
+so and does nothing, and both webhooks go in by hand.
+
+> Dashboard gotcha, if you ever do add one by hand: the header *name* and
+> *value* are two separate boxes, and pasting both into one silently
+> produces a 401 on every call.
 
 The function answers the webhook immediately and delivers in the
 background (`EdgeRuntime.waitUntil`), so the 5 s timeout cannot kill a
