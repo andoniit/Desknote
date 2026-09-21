@@ -41,14 +41,16 @@ SWIFTPM_DIR="DeskNote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
 mkdir -p "$SWIFTPM_DIR"
 cp Package.resolved "$SWIFTPM_DIR/Package.resolved"
 
-# Let this machine's own toolchain settle the graph, starting from the pins.
-# Xcode Cloud resolves with automatic resolution disabled, so the file has to
-# match the dependency graph exactly as *its* Swift sees it — and that can
-# differ from the Mac that wrote the pins: xctest-dynamic-overlay 1.13.1 ships
-# a Package@swift-6.0.swift with no dependencies and a Package.swift that pulls
-# in swift-issue-reporting, and which one is read depends on the toolchain.
-# Resolving here keeps every existing pin (versions only move if a pin no
-# longer satisfies a requirement) and adds whatever this toolchain needs.
+# ios/Package.resolved pins the graph for BOTH sides of a manifest split:
+# xctest-dynamic-overlay 1.13.1 has a Package.swift marked swift-tools 6.4
+# that depends on swift-issue-reporting (and, through it, swift-docc-plugin
+# and swift-docc-symbolkit), and a Package@swift-6.0.swift fallback with no
+# dependencies. Swift 6.4+ (Xcode Cloud) reads the first, older Swift (a Mac
+# on Xcode 26.6) the second. A locked-down resolve on the older toolchain
+# ignores the extra three pins; the newer one needs them.
+#
+# Resolving here as well prints a diff if this toolchain ever wants pins the
+# file lacks, which is how to find the next split like that one.
 echo "▸ resolving package dependencies against the pins"
 xcodebuild -resolvePackageDependencies -project DeskNote.xcodeproj -scheme DeskNote \
   | grep -E "error|Resolved source packages|: https" || true
