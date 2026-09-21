@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { signOut } from "@/app/actions/auth";
 import { fetchOwnedDevicesForUser } from "@/lib/data/paired-devices";
+import { fetchLatestFirmwareRelease } from "@/lib/data/firmware";
 import { fetchOwnDisplayName } from "@/lib/profile/display-name";
 import {
   formatPartnerLabel,
@@ -39,7 +40,10 @@ export default async function SettingsPage() {
   const partnerHint = linked ? formatPartnerLabel(partnerInfo) : "your partner";
 
   const ownDisplayName = await fetchOwnDisplayName(supabase, user.id);
-  const ownedDevices = await fetchOwnedDevicesForUser(supabase, user.id);
+  const [ownedDevices, latestFirmware] = await Promise.all([
+    fetchOwnedDevicesForUser(supabase, user.id),
+    fetchLatestFirmwareRelease(supabase),
+  ]);
 
   return (
     <AppShell>
@@ -73,7 +77,7 @@ export default async function SettingsPage() {
           ) : (
             <div className="grid gap-4 sm:gap-5">
               {ownedDevices.map((d) => (
-                <DeviceSettingsForm key={d.id} device={d} />
+                <DeviceSettingsForm key={d.id} device={d} latestFirmware={latestFirmware} />
               ))}
             </div>
           )}

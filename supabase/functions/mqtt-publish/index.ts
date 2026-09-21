@@ -1,8 +1,14 @@
 // DeskNote — mqtt-publish Edge Function
 //
-// Triggered by a Supabase Database Webhook on INSERT into public.messages.
-// Publishes the new message text to HiveMQ Cloud on topic "esp32/display"
-// (QoS 1) so a subscribed ESP32 renders it instantly — no polling anywhere.
+// Triggered by two Database Webhooks:
+//
+//   INSERT on public.messages  → publishes the note to HiveMQ Cloud on
+//     "esp32/display/<device>" (QoS 1) so the desk renders it instantly.
+//   UPDATE on public.devices   → ("devices-to-mqtt") publishes {"kind":"sync"}
+//     to the same topic, which tells the desk to GET /api/device/latest now:
+//     a new theme or name, or a firmware update waiting for it. Only desks
+//     whose firmware reports the 'sync' capability get one — anything older
+//     would render the JSON as a note.
 //
 // NOTE: HiveMQ Cloud's free (Serverless) tier has no HTTP/REST publish API,
 // so this function publishes over MQTT-over-WebSocket (port 8884, TLS) using
@@ -67,6 +73,53 @@ function publishToHiveMQ(topic: string, message: string): Promise<void> {
   });
 }
 
+function respondInBackground(task: Promise<void>, body: Record<string, unknown>) {
+  // Respond immediately so the webhook's short timeout can't EarlyDrop the
+  // worker mid-publish; the publish finishes in the background.
+  if (typeof EdgeRuntime !== "undefined") {
+    EdgeRuntime.waitUntil(task);
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  return task.then(() =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+}
+
+/// A desk's settings changed, or an update was requested for it: poke it so
+/// it checks in. The trigger's WHEN clause has already filtered out the
+/// liveness writes every check-in makes, so this never feeds itself.
+function handleDeviceChange(payload: WebhookPayload): Response | Promise<Response> {
+  const record = payload.record;
+  const deviceId = record?.id;
+  if (payload.type !== "UPDATE" || typeof deviceId !== "string" || deviceId.length === 0) {
+    return new Response(JSON.stringify({ skipped: true, reason: "not a device update" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const capabilities = Array.isArray(record?.capabilities) ? record.capabilities : [];
+  if (!capabilities.includes("sync")) {
+    return new Response(
+      JSON.stringify({ skipped: true, reason: "desk firmware does not understand sync" }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  const topic = `${MQTT_TOPIC_PREFIX}/${deviceId}`;
+  const task = publishToHiveMQ(topic, JSON.stringify({ kind: "sync" }))
+    .then(() => console.log(`Sync poke to ${topic}`))
+    .catch((err) => console.error(`MQTT sync to ${topic} failed:`, err));
+
+  return respondInBackground(task, { ok: true, topic, kind: "sync" });
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -86,6 +139,10 @@ Deno.serve(async (req) => {
     payload = await req.json();
   } catch {
     return new Response("Invalid JSON body", { status: 400 });
+  }
+
+  if (payload.table === "devices") {
+    return handleDeviceChange(payload);
   }
 
   if (payload.type !== "INSERT" || !payload.record) {

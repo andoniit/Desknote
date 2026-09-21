@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
 import { requireDeviceAuth } from "@/lib/api/device/require-device-auth";
+import { readDeskReport, reconcileFirmware } from "@/lib/api/device/ota";
 
 /**
  * GET /api/device/latest?deviceId=<uuid> — newest **queued** note for this display’s owner.
  * Also bumps `last_seen_at` / `online` and returns the same **flat** desk context keys as
  * `/api/device/wait` (`theme`, `accent_color`, `name`, `last_message_body`, …) so firmware
  * that polls `/latest` on a timer or tap still applies the theme chosen in the web app.
+ *
+ * Also records `X-Firmware-Version` / `X-Desk-Capabilities` and, when the owner
+ * has asked for a firmware update, adds the flat `ota_*` keys the desk installs
+ * it from (see lib/api/device/ota.ts).
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -17,6 +22,10 @@ export async function GET(request: Request) {
     .from("devices")
     .update({ last_seen_at: now, online: true })
     .eq("id", auth.deviceId);
+
+  // Runs for unpaired desks too, so their version is on record from the
+  // first check-in; only a paired desk can have an update requested.
+  const otaOffer = await reconcileFirmware(auth, readDeskReport(request));
 
   if (!auth.ownerId) {
     return NextResponse.json({
@@ -82,6 +91,7 @@ export async function GET(request: Request) {
   if (desk?.note_card_background) payload.note_card_background = desk.note_card_background;
   if (owner?.display_name) payload.display_name = owner.display_name;
   if (lastBody !== null) payload.last_message_body = lastBody;
+  if (otaOffer) Object.assign(payload, otaOffer);
 
   const note = queuedRes.data;
   if (note) {

@@ -28,6 +28,8 @@ final class DeskStore {
     private(set) var devices: [DeviceRow] = []
     /// Desks you own — the only ones whose settings you may edit.
     private(set) var ownedDevices: [DeviceRow] = []
+    /// The newest firmware build, for the Update button on each desk.
+    private(set) var latestFirmware: FirmwareRelease?
 
     private(set) var history = MessagesAPI.HistoryPage()
     var historyFilter: HistoryFilter = .all {
@@ -157,6 +159,7 @@ final class DeskStore {
         partner = .none
         devices = []
         ownedDevices = []
+        latestFirmware = nil
         history = MessagesAPI.HistoryPage()
         historyPage = 1
         phase = .signedOut
@@ -197,11 +200,13 @@ final class DeskStore {
 
         async let paired = DevicesAPI.paired(userID: userID, partnerID: partner.partnerID)
         async let owned = DevicesAPI.owned(userID: userID)
+        async let firmware = FirmwareAPI.latestRelease()
         async let members = isLinked ? 2 : RelationshipAPI.memberCount(userID: userID)
         async let unpair = isLinked ? RelationshipAPI.unpairState(userID: userID) : UnpairState.none
 
         devices = await paired
         ownedDevices = await owned
+        latestFirmware = await firmware
         relationshipMemberCount = await members
         unpairState = await unpair
 

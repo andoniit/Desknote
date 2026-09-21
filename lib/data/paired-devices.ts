@@ -16,10 +16,16 @@ export type PairedDeviceRow = {
   owner_id: string;
   online: boolean | null;
   last_seen_at: string | null;
+  /** What the desk firmware reports it can do: "sync", "ota". */
+  capabilities: string[] | null;
+  ota_target_version: string | null;
+  ota_status: "requested" | "downloading" | "updated" | "failed" | null;
+  ota_error: string | null;
+  ota_status_at: string | null;
 };
 
 const DEVICE_SELECT =
-  "id, name, location_name, theme, accent_color, note_card_background, pinned_mode_enabled, firmware_version, owner_id, online, last_seen_at";
+  "id, name, location_name, theme, accent_color, note_card_background, pinned_mode_enabled, firmware_version, owner_id, online, last_seen_at, capabilities, ota_target_version, ota_status, ota_error, ota_status_at";
 
 /** Paired devices visible to this user (own + partner when linked). */
 export async function fetchPairedDevicesForUser(

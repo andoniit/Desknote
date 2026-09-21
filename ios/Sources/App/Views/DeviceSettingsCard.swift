@@ -97,6 +97,12 @@ struct DeviceSettingsCard: View {
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(isSaving)
 
+                Divider().overlay(Palette.ash200)
+
+                FirmwareUpdateSection(device: device)
+
+                Divider().overlay(Palette.ash200)
+
                 Button("Unpair this desk") { confirmingUnpair = true }
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(isSaving)

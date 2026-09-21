@@ -21,6 +21,9 @@
 # misc
 .DS_Store
 *.pem
+# ...except the PUBLIC firmware signing key, which release-firmware.sh verifies
+# against. The private half lives in ~/.desknote and never enters the repo.
+!/firmware/firmware-signing.pub.pem
 
 # debug
 npm-debug.log*
@@ -45,7 +48,9 @@ next-env.d.ts
 # vercel
 .vercel
 docs/mqtt-push-setup.md
-firmware/desknote_main/desknote_main.ino
 firmware/desknote_mqtt/desknote_mqtt.ino
 scripts/gen_emoji_assets.py
 scripts/gen_emoji_assets.py
+
+# Firmware release builds (scripts/release-firmware.sh)
+/build/

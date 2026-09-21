@@ -9,6 +9,8 @@ import { DEVICE_ACCENTS } from "@/lib/devices/accents";
 import { DEVICE_NOTE_CARD_BACKGROUNDS } from "@/lib/devices/note-card-background";
 import { DEVICE_THEMES } from "@/lib/devices/themes";
 import type { PairedDeviceRow } from "@/lib/data/paired-devices";
+import type { FirmwareRelease } from "@/lib/data/firmware";
+import { FirmwareUpdatePanel } from "@/components/settings/FirmwareUpdatePanel";
 import { isDeviceAccentId } from "@/lib/devices/accents";
 import { isDeviceNoteCardBackgroundId } from "@/lib/devices/note-card-background";
 import { isDeviceThemeId } from "@/lib/devices/themes";
@@ -22,6 +24,8 @@ import { cn } from "@/lib/utils";
 
 type Props = {
   device: PairedDeviceRow;
+  /** Newest firmware build, for the update panel under the form. */
+  latestFirmware?: FirmwareRelease | null;
   disabled?: boolean;
 };
 
@@ -40,7 +44,7 @@ function defaultNoteCardBackground(device: PairedDeviceRow): string {
   return isDeviceNoteCardBackgroundId(v) ? v : "match_theme";
 }
 
-export function DeviceSettingsForm({ device, disabled }: Props) {
+export function DeviceSettingsForm({ device, latestFirmware = null, disabled }: Props) {
   const [state, formAction, pending] = useActionState(
     updateDeviceSettingsAction,
     null as UpdateDeviceSettingsState | null
@@ -224,6 +228,9 @@ export function DeviceSettingsForm({ device, disabled }: Props) {
           {pending ? "Saving…" : "Save desk settings"}
         </Button>
       </form>
+
+      {/* Its own forms, so it sits outside the settings <form>. */}
+      <FirmwareUpdatePanel device={device} latest={latestFirmware} />
     </Card>
   );
 }

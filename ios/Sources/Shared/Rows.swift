@@ -14,11 +14,23 @@ struct DeviceRow: Decodable, Identifiable, Hashable, Sendable {
     let ownerID: UUID
     let online: Bool?
     let lastSeenAt: Date?
+    /// What the desk's firmware says it can do: "sync", "ota". Empty for
+    /// firmware from before over-the-air updates.
+    let capabilities: [String]?
+    /// The update the owner asked for, and how it is going. See
+    /// `FirmwareUpdateSection`.
+    let otaTargetVersion: String?
+    let otaStatus: String?
+    let otaError: String?
+    let otaStatusAt: Date?
+
+    var canUpdateOverTheAir: Bool { capabilities?.contains("ota") ?? false }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, theme, online
+        case id, name, theme, online, capabilities
         case locationName, accentColor, noteCardBackground
         case pinnedModeEnabled, firmwareVersion, lastSeenAt
+        case otaTargetVersion, otaStatus, otaError, otaStatusAt
         // `owner_id` becomes `ownerId` under snake-case conversion; the
         // property is spelled `ownerID` to read like Swift.
         case ownerID = "ownerId"
@@ -26,8 +38,18 @@ struct DeviceRow: Decodable, Identifiable, Hashable, Sendable {
 
     static let columns = """
         id, name, location_name, theme, accent_color, note_card_background, \
-        pinned_mode_enabled, firmware_version, owner_id, online, last_seen_at
+        pinned_mode_enabled, firmware_version, owner_id, online, last_seen_at, \
+        capabilities, ota_target_version, ota_status, ota_error, ota_status_at
         """
+}
+
+/// One row of `public.firmware_releases` — a build owners can update to.
+struct FirmwareRelease: Decodable, Hashable, Sendable {
+    let version: String
+    let notes: String?
+    let publishedAt: Date
+
+    static let columns = "version, notes, published_at"
 }
 
 /// One row of `public.messages`.

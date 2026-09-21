@@ -327,3 +327,54 @@ export async function unpairDeviceAction(
       "Desk unpaired. Power-cycle the display — it will show a fresh six-digit code so you (or someone else) can claim it again.",
   };
 }
+
+export type RequestFirmwareUpdateState =
+  | { ok: true; message: string }
+  | { ok: false; message: string };
+
+const firmwareErrors: Record<string, string> = {
+  needs_usb_update:
+    "This desk's firmware is too old to update itself. Flash it over USB once — after that, updates come from here.",
+  up_to_date: "This desk is already on the newest firmware.",
+  no_release: "There is no firmware release to update to yet.",
+  not_owner: "Only the desk's owner can update it.",
+  not_authenticated: "Sign in to update a desk.",
+};
+
+/**
+ * Asks a desk to update itself to the newest firmware release. The
+ * `request_firmware_update` RPC picks the version and checks ownership and
+ * capability; the server then pokes the desk over MQTT and it takes it from
+ * there — see supabase/migrations/20260921120000_firmware_ota.sql.
+ */
+export async function requestFirmwareUpdateAction(
+  _prev: RequestFirmwareUpdateState | null,
+  formData: FormData
+): Promise<RequestFirmwareUpdateState> {
+  const deviceId = String(formData.get("device_id") ?? "");
+  const idErr = validateDeviceId(deviceId);
+  if (idErr) return { ok: false, message: idErr };
+
+  const supabase = createClient(await cookies());
+  const { data: version, error } = await supabase.rpc("request_firmware_update", {
+    p_device_id: deviceId,
+  });
+
+  if (error) {
+    const key = Object.keys(firmwareErrors).find((k) => error.message?.includes(k));
+    return {
+      ok: false,
+      message: key
+        ? firmwareErrors[key]
+        : "Could not ask the desk to update. Please try again shortly.",
+    };
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/devices");
+
+  return {
+    ok: true,
+    message: `Update to ${String(version)} requested. The desk downloads it, checks it and restarts — keep it plugged in.`,
+  };
+}

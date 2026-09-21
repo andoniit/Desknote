@@ -14,3 +14,8 @@ const char*    kMqttHost = "YOUR_HIVEMQ_HOST";  // e.g. xxxx.s1.eu.hivemq.cloud
 const uint16_t kMqttPort = 8883;
 const char*    kMqttUser = "YOUR_HIVEMQ_USER";
 const char*    kMqttPass = "YOUR_HIVEMQ_PASS";
+
+// Wi-Fi to try on first boot, before anything is saved in NVS. Leave empty to
+// send a fresh desk straight to the on-screen network picker.
+const char* WIFI_SSID     = "";
+const char* WIFI_PASSWORD = "";

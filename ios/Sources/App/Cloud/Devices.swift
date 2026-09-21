@@ -154,3 +154,53 @@ extension DevicesAPI {
         return "Desk unpaired. Power-cycle the display — it will show a fresh six-digit code so you (or someone else) can claim it again."
     }
 }
+
+// MARK: - Firmware
+
+/// Over-the-air updates for the desks. The phone never touches the image: it
+/// asks, and the desk fetches, checks and installs it itself. See
+/// `supabase/migrations/20260921120000_firmware_ota.sql` for the whole path.
+enum FirmwareAPI {
+    private static var client: SupabaseClient { Cloud.client }
+
+    /// The newest published build, or nil when none has been released (or
+    /// the migration has not run yet).
+    static func latestRelease() async -> FirmwareRelease? {
+        let rows: [FirmwareRelease]? = try? await client.from("firmware_releases")
+            .select(FirmwareRelease.columns)
+            .order("published_at", ascending: false)
+            .limit(1)
+            .execute().value
+        return rows?.first
+    }
+
+    /// Asks the desk to update to the newest release. `request_firmware_update`
+    /// picks the version itself and checks ownership and capability, so the
+    /// errors it raises are the sentences below.
+    @discardableResult
+    static func requestUpdate(deviceID: UUID) async throws -> String {
+        struct Params: Encodable {
+            let pDeviceID: UUID
+            enum CodingKeys: String, CodingKey { case pDeviceID = "p_device_id" }
+        }
+        do {
+            let version: String = try await client
+                .rpc("request_firmware_update", params: Params(pDeviceID: deviceID))
+                .execute().value
+            return version
+        } catch {
+            let raw = error.localizedDescription
+            let known: [(String, String)] = [
+                ("needs_usb_update",
+                 "This desk's firmware is too old to update itself. Flash it over USB once — after that, updates come from here."),
+                ("up_to_date", "This desk is already on the newest firmware."),
+                ("no_release", "There is no firmware release to update to yet."),
+                ("not_owner", "Only the desk's owner can update it."),
+            ]
+            if let match = known.first(where: { raw.contains($0.0) }) {
+                throw DeskError(match.1)
+            }
+            throw DeskError("Could not ask the desk to update. Please try again shortly.")
+        }
+    }
+}
