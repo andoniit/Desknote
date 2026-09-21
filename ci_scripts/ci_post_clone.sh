@@ -41,4 +41,20 @@ SWIFTPM_DIR="DeskNote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
 mkdir -p "$SWIFTPM_DIR"
 cp Package.resolved "$SWIFTPM_DIR/Package.resolved"
 
+# Let this machine's own toolchain settle the graph, starting from the pins.
+# Xcode Cloud resolves with automatic resolution disabled, so the file has to
+# match the dependency graph exactly as *its* Swift sees it — and that can
+# differ from the Mac that wrote the pins: xctest-dynamic-overlay 1.13.1 ships
+# a Package@swift-6.0.swift with no dependencies and a Package.swift that pulls
+# in swift-issue-reporting, and which one is read depends on the toolchain.
+# Resolving here keeps every existing pin (versions only move if a pin no
+# longer satisfies a requirement) and adds whatever this toolchain needs.
+echo "▸ resolving package dependencies against the pins"
+xcodebuild -resolvePackageDependencies -project DeskNote.xcodeproj -scheme DeskNote \
+  | grep -E "error|Resolved source packages|: https" || true
+if ! cmp -s Package.resolved "$SWIFTPM_DIR/Package.resolved"; then
+  echo "▸ this toolchain changed the pins — refresh ios/Package.resolved from:"
+  diff Package.resolved "$SWIFTPM_DIR/Package.resolved" || true
+fi
+
 echo "▸ post-clone complete"
