@@ -90,7 +90,7 @@ const char* kServerBaseUrl   = "https://www.desknote.space";
 // character — scripts/release-firmware.sh refuses to publish otherwise. A
 // mismatch would leave the server offering this desk the build it already
 // runs, forever.
-const char* kFirmwareVersion = "main-5.0";
+const char* kFirmwareVersion = "main-5.1";
 
 // What this build can do, sent as X-Desk-Capabilities on every check-in.
 // sync: understands the {"kind":"sync"} MQTT poke. ota: installs signed
