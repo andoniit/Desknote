@@ -11,30 +11,33 @@ struct NotificationsCard: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        DeskCard(padding: 18) {
-            VStack(alignment: .leading, spacing: 14) {
-                PanelHeader(
-                    title: "Notifications",
-                    subtitle: "A gentle tap on the shoulder when your partner leaves a note on your desk. What it says stays between the two of you — the notification never shows it.")
-
-                switch push.authorization {
-                case .authorized, .provisional, .ephemeral:
-                    Notice(text: "On — you will know the moment a note arrives.", tone: .success)
-                case .denied:
-                    Notice(
-                        text: "Turned off in iOS Settings. Notes still land on your desk and in the app; this phone just stays quiet.",
-                        tone: .info)
-                    Button("Open iOS Settings") {
-                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                        UIApplication.shared.open(url)
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                default:
-                    Button("Turn on notifications") {
-                        Task { await push.requestPermission() }
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
+        HStack(spacing: 12) {
+            Image(systemName: isOn ? "bell.fill" : "bell.slash")
+                .font(.system(size: 14))
+                .foregroundStyle(isOn ? Palette.rose400 : Palette.plum300)
+                .frame(width: 32, height: 32)
+                .background(isOn ? Palette.rose50 : Palette.cream200)
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Notifications").font(.system(size: 15)).foregroundStyle(Palette.ink)
+                Text(caption).font(.system(size: 12)).foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            switch push.authorization {
+            case .authorized, .provisional, .ephemeral:
+                EmptyView()
+            case .denied:
+                Button("Settings") {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
                 }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Palette.rose400)
+            default:
+                Button("Turn on") { Task { await push.requestPermission() } }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Palette.rose400)
             }
         }
         .task { await push.refreshAuthorization() }
@@ -43,6 +46,24 @@ struct NotificationsCard: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await push.refreshAuthorization() }
+        }
+    }
+
+    private var isOn: Bool {
+        switch push.authorization {
+        case .authorized, .provisional, .ephemeral: return true
+        default: return false
+        }
+    }
+
+    private var caption: String {
+        switch push.authorization {
+        case .authorized, .provisional, .ephemeral:
+            return "On — you'll know when a note lands. The words stay private."
+        case .denied:
+            return "Off in iOS Settings."
+        default:
+            return "Get a nudge when a note lands on your desk."
         }
     }
 }

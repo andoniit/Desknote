@@ -21,38 +21,31 @@ struct RelationshipView: View {
     @State private var confirmingUnpair = false
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    PageHeader(
-                        eyebrow: "For two",
-                        description: "DeskNote is made for one pair. Create a short-lived invite code for your partner, or enter theirs — once you are linked, notes and devices are shared between you."
-                    ) {
-                        Text("Link your ")
-                            + Text("desks together").italic().foregroundColor(Palette.rose300)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if store.isLinked {
+                    pairedCard
+                } else {
+                    Text("DeskNote is for two. Share a code with your partner, or enter theirs — then you can send to each other's desks.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if store.isWaitingForPartner {
+                        Notice(
+                            text: "Waiting for your partner to enter your code. A fresh code replaces the old one.",
+                            tone: .info)
                     }
-
-                    if store.isLinked {
-                        pairedCard
-                    } else {
-                        if store.isWaitingForPartner {
-                            Notice(
-                                text: "You already started a pair and we are waiting for your partner to enter the code. You can create a fresh code below; the old one will stop working.",
-                                tone: .info)
-                        }
-                        shareCard
-                        joinCard
-                    }
+                    shareCard
+                    joinCard
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 40)
             }
-            .scrollDismissesKeyboard(.interactively)
-            .refreshable { await store.refresh() }
-            .deskBackground()
-            .navigationBarTitleDisplayMode(.inline)
+            .padding(20)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .refreshable { await store.refresh() }
+        .deskBackground()
+        .navigationTitle("Your partner")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Linked
@@ -61,8 +54,8 @@ struct RelationshipView: View {
         DeskCard(padding: 18) {
             VStack(alignment: .leading, spacing: 14) {
                 PanelHeader(
-                    title: "You are linked",
-                    subtitle: "Paired with \(store.partnerLabel). Notes and devices are shared between your accounts.")
+                    title: "Linked with \(store.partnerLabel)",
+                    subtitle: "You can send to each other's desks.")
 
                 switch store.unpairState {
                 case .requestedByMe:

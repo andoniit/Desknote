@@ -171,10 +171,15 @@ function payloadFor(context: NoteContext) {
   };
 }
 
-async function deliver(tokens: PushToken[], context: NoteContext) {
+/// Returns how many phones Apple accepted the push for. The caller logs
+/// that number — not the number attempted — so a key Apple refuses (as with
+/// a Sandbox-only key and a TestFlight phone: 403 BadEnvironmentKeyInToken)
+/// shows up as "0 of 1" instead of looking like success.
+async function deliver(tokens: PushToken[], context: NoteContext): Promise<number> {
   const jwt = await providerToken();
   const body = JSON.stringify(payloadFor(context));
   const dead: string[] = [];
+  let delivered = 0;
 
   await Promise.all(tokens.map(async ({ token, environment }) => {
     const host = APNS_HOST[environment] ?? APNS_HOST.production;
@@ -191,7 +196,10 @@ async function deliver(tokens: PushToken[], context: NoteContext) {
         body,
       });
 
-      if (response.ok) return;
+      if (response.ok) {
+        delivered++;
+        return;
+      }
 
       const text = await response.text();
       const reason = (() => {
@@ -224,6 +232,7 @@ async function deliver(tokens: PushToken[], context: NoteContext) {
       .catch((error) => console.error("could not prune dead tokens:", error));
     console.log(`Pruned ${dead.length} dead token(s)`);
   }
+  return delivered;
 }
 
 // MARK: - Webhook
@@ -304,7 +313,8 @@ Deno.serve(async (req) => {
     // Answer the webhook straight away — its timeout is short, and an
     // EarlyDrop mid-flight would kill the deliveries.
     const task = deliver(tokens, context)
-      .then(() => console.log(`Pushed to ${tokens.length} device(s) for desk ${deviceID}`))
+      .then((delivered) =>
+        console.log(`Delivered to ${delivered} of ${tokens.length} device(s) for desk ${deviceID}`))
       .catch((error) => console.error("push delivery failed:", error));
 
     if (typeof EdgeRuntime !== "undefined") {

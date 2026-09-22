@@ -7,6 +7,10 @@ struct DeskNoteApp: App {
     @UIApplicationDelegateAdaptor(DeskAppDelegate.self) private var appDelegate
     @State private var store = DeskStore()
 
+    init() {
+        SystemAppearance.apply()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

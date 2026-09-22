@@ -58,7 +58,7 @@ struct FirmwareUpdateSection: View {
             case .needsUSB(let current):
                 line(current.map { "Running \($0)." } ?? "Version not reported yet.")
                 Notice(
-                    text: "This firmware predates over-the-air updates. Flash it over USB once — ./scripts/flash-desk.sh — and after that, updates come from here.",
+                    text: "This desk needs a one-time update over USB before it can update itself from here.",
                     tone: .info)
 
             case .working(let target, let downloading, let since):

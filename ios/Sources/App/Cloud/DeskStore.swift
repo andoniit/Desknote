@@ -16,6 +16,9 @@ final class DeskStore {
     }
 
     private(set) var phase: Phase = .checking
+    /// False until the first full load after sign-in, so screens can tell
+    /// "nothing yet" from "nothing at all" and not flash an empty state.
+    private(set) var hasLoaded = false
     private(set) var userID: UUID?
     private(set) var email: String?
 
@@ -32,6 +35,10 @@ final class DeskStore {
     private(set) var latestFirmware: FirmwareRelease?
 
     private(set) var history = MessagesAPI.HistoryPage()
+    /// The newest few notes either way, for the Desk tab. Kept apart from
+    /// `history` so changing the History tab's filter or page never changes
+    /// what the Desk tab shows.
+    private(set) var recent: [MessageHistoryEntry] = []
     var historyFilter: HistoryFilter = .all {
         didSet {
             guard historyFilter != oldValue else { return }
@@ -161,6 +168,8 @@ final class DeskStore {
         ownedDevices = []
         latestFirmware = nil
         history = MessagesAPI.HistoryPage()
+        recent = []
+        hasLoaded = false
         historyPage = 1
         phase = .signedOut
         SharedContainer.writeSnapshots([])
@@ -212,6 +221,20 @@ final class DeskStore {
 
         await publishWidgetSnapshot()
         await reloadHistory()
+        await reloadRecent()
+        hasLoaded = true
+    }
+
+    func reloadRecent() async {
+        guard let userID else { return }
+        guard let page = try? await MessagesAPI.history(
+            viewerID: userID,
+            pairedDeviceIDs: devices.map(\.id),
+            myDeskDeviceIDs: myDeviceIDs,
+            filter: .all,
+            page: 1)
+        else { return }
+        recent = Array(MessagesAPI.attachDeviceNames(page.entries, names: deviceNames).prefix(3))
     }
 
     /// Hands the home screen widget what it should draw.
@@ -284,6 +307,7 @@ final class DeskStore {
             isPinned: isPinned)
         toast = message
         await reloadHistory()
+        await reloadRecent()
     }
 
     /// Maps "my desk / their desk / both" onto concrete device ids.
@@ -322,6 +346,23 @@ final class DeskStore {
         if isLinked && !theirs.isEmpty { out.append((.theirDesk, names(theirs))) }
         if isLinked && !mine.isEmpty && !theirs.isEmpty { out.append((.both, "Both")) }
         return out.map { (target: $0.0, label: $0.1) }
+    }
+
+    /// The composer's destination switch: their desk by its name, then
+    /// "Mine" and "Both" — only the ones that have a desk behind them.
+    var destinationChoices: [(target: QuickSendTarget, label: String)] {
+        availableQuickSendTargets.map { choice in
+            switch choice.target {
+            case .myDesk: return (choice.target, isLinked ? "Mine" : choice.label)
+            case .theirDesk: return choice
+            case .both: return (choice.target, "Both")
+            }
+        }
+        // Their desk first: a note for your partner is the common case.
+        .sorted { lhs, rhs in
+            let order: [QuickSendTarget] = [.theirDesk, .myDesk, .both]
+            return (order.firstIndex(of: lhs.target) ?? 0) < (order.firstIndex(of: rhs.target) ?? 0)
+        }
     }
 
     /// "Your display" / "Their display" / "Shared" under a desk's name.

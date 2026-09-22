@@ -272,7 +272,11 @@ extension View {
 
     /// A text field dressed like the web's `.input`.
     func deskFieldChrome() -> some View {
-        padding(.horizontal, 13)
+        // Explicit ink and caret colours: without them a field falls back to
+        // the system's, and the email field on sign-in rendered in blue.
+        foregroundStyle(Palette.ink)
+            .tint(Palette.plum500)
+            .padding(.horizontal, 13)
             .padding(.vertical, 12)
             .background(Color.white.opacity(0.85))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

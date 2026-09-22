@@ -52,8 +52,8 @@ enum HistoryFilter: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .all: return "All"
-        case .sent: return "Sent by you"
-        case .desk: return "On your desk"
+        case .sent: return "Sent"
+        case .desk: return "On my desk"
         }
     }
 }

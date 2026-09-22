@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Session gate and the four tabs, matching the web's nav:
-/// Desk / Pair / Devices / Settings.
+/// Session gate and the four tabs: Desk (write and send), History,
+/// Desks (each desk's look and firmware), Settings (you and your partner).
 struct RootView: View {
     @Environment(DeskStore.self) private var store
 
@@ -25,19 +25,19 @@ private struct SignedInTabs: View {
     private let push = PushRegistrar.shared
     @State private var tab = Tab.desk
 
-    enum Tab { case desk, pair, devices, settings }
+    enum Tab { case desk, history, desks, settings }
 
     var body: some View {
         TabView(selection: $tab) {
-            DashboardView()
+            DashboardView(onSeeAll: { tab = .history }, onOpenDesks: { tab = .desks })
                 .tabItem { Label("Desk", systemImage: "heart") }
                 .tag(Tab.desk)
-            RelationshipView()
-                .tabItem { Label("Pair", systemImage: "link") }
-                .tag(Tab.pair)
+            HistoryView()
+                .tabItem { Label("History", systemImage: "clock") }
+                .tag(Tab.history)
             DevicesView()
-                .tabItem { Label("Devices", systemImage: "rectangle.on.rectangle") }
-                .tag(Tab.devices)
+                .tabItem { Label("Desks", systemImage: "rectangle.on.rectangle") }
+                .tag(Tab.desks)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(Tab.settings)
