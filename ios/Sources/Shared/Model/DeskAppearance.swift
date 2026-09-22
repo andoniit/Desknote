@@ -8,11 +8,15 @@ struct DeskTheme: Identifiable, Hashable {
     let hint: String
 
     static let all: [DeskTheme] = [
-        .init(id: "cream", label: "Cream & plum",
-              hint: "Header, menus, and paired screens — soft default like the app."),
-        .init(id: "blush", label: "Blush", hint: "Warm rose frame and menu tones."),
-        .init(id: "plum", label: "Plum", hint: "Deeper frame and menu background."),
-        .init(id: "sage", label: "Sage", hint: "Quiet green frame and menu tones."),
+        // Keep in step with lib/devices/themes.ts and kThemes in the firmware.
+        .init(id: "cream", label: "Cream", hint: "Warm paper and plum ink — the app's own look."),
+        .init(id: "blush", label: "Blush", hint: "Rose-tinted paper, deep berry ink."),
+        .init(id: "sage", label: "Sage", hint: "Quiet green paper, forest ink."),
+        .init(id: "lavender", label: "Lavender", hint: "Soft lilac paper, deep violet ink."),
+        .init(id: "sky", label: "Sky", hint: "Pale blue paper, navy ink."),
+        .init(id: "peach", label: "Peach", hint: "Warm apricot paper, brown ink."),
+        .init(id: "plum", label: "Plum", hint: "Dark plum with blush text — easy on the eyes."),
+        .init(id: "midnight", label: "Midnight", hint: "Dark navy for a bedside desk at night."),
     ]
 
     static func isValid(_ id: String) -> Bool { all.contains { $0.id == id } }
@@ -34,6 +38,9 @@ struct DeskAccent: Identifiable, Hashable {
         .init(id: "plum", label: "Plum"),
         .init(id: "sage", label: "Sage"),
         .init(id: "cream", label: "Cream"),
+        .init(id: "lavender", label: "Lavender"),
+        .init(id: "sky", label: "Sky"),
+        .init(id: "peach", label: "Peach"),
     ]
 
     static func isValid(_ id: String) -> Bool { all.contains { $0.id == id } }

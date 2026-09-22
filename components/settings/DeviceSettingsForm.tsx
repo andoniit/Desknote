@@ -108,7 +108,7 @@ export function DeviceSettingsForm({ device, latestFirmware = null, disabled }: 
                   "has-[:checked]:border-rose-200 has-[:checked]:bg-blush-50/60 has-[:checked]:shadow-soft"
                 )}
               >
-                <span className="flex items-start gap-2">
+                <span className="flex items-start gap-2.5">
                   <input
                     type="radio"
                     name="theme"
@@ -117,6 +117,14 @@ export function DeviceSettingsForm({ device, latestFirmware = null, disabled }: 
                     disabled={disabled || pending}
                     className="mt-1 h-4 w-4 shrink-0 border-ash-300 text-plum-400 focus:ring-rose-200"
                   />
+                  {/* The desk's own paper and ink, so the choice is visible before saving. */}
+                  <span
+                    aria-hidden="true"
+                    className="flex h-9 w-11 shrink-0 items-center justify-center rounded-lg border border-ash-200/80 font-serif text-sm"
+                    style={{ backgroundColor: t.paper, color: t.ink }}
+                  >
+                    Aa
+                  </span>
                   <span>
                     <span className="block text-sm font-medium text-plum-500">{t.label}</span>
                     <span className="mt-0.5 block text-xs text-plum-300">{t.hint}</span>
@@ -131,8 +139,8 @@ export function DeviceSettingsForm({ device, latestFirmware = null, disabled }: 
           <legend className="text-sm font-medium text-plum-400">Accent color</legend>
           <p className="text-xs text-plum-200">
             Highlights in the web app and on the desk <span className="font-medium">header</span>{" "}
-            (badges, links, firmware chip). Same palette as when you pick Rose, Blush, Plum, Sage, or
-            Cream here.
+            (badges, links, firmware chip). On the desk it colours the heart, stickers and progress
+            bar — pick the one that suits the theme.
           </p>
           <div className="flex flex-wrap gap-2 sm:gap-3">
             {DEVICE_ACCENTS.map((a) => (

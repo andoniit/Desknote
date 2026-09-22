@@ -54,3 +54,6 @@ scripts/gen_emoji_assets.py
 
 # Firmware release builds (scripts/release-firmware.sh)
 /build/
+
+# Python bytecode (scripts/)
+__pycache__/

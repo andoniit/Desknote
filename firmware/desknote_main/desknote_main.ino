@@ -34,6 +34,10 @@
  *     Two 1.9 MB app slots, which is what over-the-air updates swap between.
  *     The partition table can only change over USB, so every desk needs this
  *     once; NVS stays at 0x9000, so Wi-Fi and pairing survive the reflash.
+ *   - Type is Fraunces (the app's font) as anti-aliased smooth fonts compiled
+ *     in from desk_fonts.gen.h — regenerate with scripts/gen_desk_fonts.py,
+ *     preview every screen with scripts/preview_desk_screens.py. TFT_eSPI's
+ *     User_Setup.h must have SMOOTH_FONT defined (the stock one does).
  *   - Libraries: TFT_eSPI by Bodmer (User_Setup.h next to this sketch must be
  *     copied over ~/Documents/Arduino/libraries/TFT_eSPI/User_Setup.h),
  *     PubSubClient by Nick O'Leary.
@@ -90,7 +94,7 @@ const char* kServerBaseUrl   = "https://www.desknote.space";
 // character — scripts/release-firmware.sh refuses to publish otherwise. A
 // mismatch would leave the server offering this desk the build it already
 // runs, forever.
-const char* kFirmwareVersion = "main-5.1";
+const char* kFirmwareVersion = "main-5.2";
 
 // What this build can do, sent as X-Desk-Capabilities on every check-in.
 // sync: understands the {"kind":"sync"} MQTT poke. ota: installs signed
@@ -104,6 +108,9 @@ const char* kDeskCapabilities = "sync,ota";
 
 // Public half of the firmware signing key (scripts/firmware-keygen.sh).
 #include "firmware_signing_key.h"
+
+// Fraunces, the app's typeface, as anti-aliased TFT_eSPI smooth fonts.
+#include "desk_fonts.gen.h"
 
 // Each desk subscribes to "<prefix>/<device_id>" using its registered id.
 const char* kMqttTopicPrefix = "esp32/display";
@@ -246,20 +253,45 @@ String gThemeId  = "cream";
 String gAccentId = "";
 String gNoteCardBackground = "match_theme";
 
+// One screen's colours. Every screen paints the whole panel in `paper`, the
+// way the app is warm paper everywhere — there is no black frame any more.
 struct ThemePalette {
-  uint16_t bg;
-  uint16_t headerBar;
-  uint16_t accent;
-  uint16_t title;
-  uint16_t body;
-  uint16_t subtle;
-  /** Full-screen note / idle hero card (was fixed beige + brown). */
-  uint16_t notePanel;
-  uint16_t noteFg;
-  /** “DeskNote-{name}” on the black strip under the rounded card. */
-  uint16_t noteFooterOnBlack;
-  /** Monochrome emoji / sticker tint on the note panel. */
-  uint16_t noteEmoji;
+  uint16_t paper;   // the whole screen
+  uint16_t ink;     // notes and titles
+  uint16_t muted;   // hints, names, the footer under a note
+  uint16_t line;    // hairlines, code boxes, the empty progress track
+  uint16_t accent;  // the heart, stickers, progress
+  uint16_t alert;   // offline, failures — soft, never pure red
+  bool     dark;
+};
+
+// The Fraunces sizes in desk_fonts.gen.h (scripts/gen_desk_fonts.py). Declared
+// up here because functions take it as a parameter.
+enum class DeskFont : uint8_t {
+  Note30,    // a note, largest first — long notes step down through these
+  Note24,    // …and screen titles
+  Note19,
+  Note16,
+  Head17,    // "DeskNote" in the header
+  Meta13,    // hints, status, version, names
+  Foot14,    // italic, under a note
+  Digits32,  // the pairing code
+};
+
+// Rows of the theme / accent tables and a font's data + real space width.
+// Declared up here with the rest because helper functions take them.
+struct ThemeSpec {
+  const char* id;
+  uint32_t    paper, ink, muted, line, accent;
+  bool        dark;
+};
+struct AccentSpec {
+  const char* id;
+  uint32_t    onLight, onDark;
+};
+struct FontSpec {
+  const uint8_t* data;
+  uint8_t        space;
 };
 
 // First-boot-only: the pairing code we just got back from /register. We
@@ -415,70 +447,82 @@ bool jsonContainsKeyValue(const String& json, const char* key, const char* value
   return json.indexOf(needle) >= 0;
 }
 
-ThemePalette paletteForDesk() {
+// RGB888 → the panel's RGB565, at compile time.
+static constexpr uint16_t rgb(uint32_t hex) {
+  return (uint16_t)(((hex >> 8) & 0xF800) | ((hex >> 5) & 0x07E0) | ((hex >> 3) & 0x001F));
+}
+
+// The desk themes. Keep the ids in step with lib/devices/themes.ts and
+// DeskTheme in the iOS app; the colours match the mockups in the app's
+// palette (tailwind.config.ts / Palette.swift) where the two overlap.
+static const ThemeSpec kThemes[] = {
+    {"cream",    0xFDFAF6, 0x4E353D, 0x8B6A77, 0xEFE4DA, 0xD98A8A, false},
+    {"blush",    0xFBE8E4, 0x5A2E36, 0x9A6069, 0xF1CFC8, 0xC26767, false},
+    {"sage",     0xEEF2EA, 0x2F3B30, 0x667866, 0xD9E2D3, 0x6F8F74, false},
+    {"plum",     0x2A1C22, 0xF4E6EA, 0xB798A3, 0x3E2B33, 0xE8A5B0, true},
+    {"lavender", 0xEEEAF6, 0x3C3452, 0x766C92, 0xDCD5EC, 0x8B7BB8, false},
+    {"sky",      0xE8F0F6, 0x22384A, 0x5E7488, 0xD2E0EC, 0x5E8DB3, false},
+    {"peach",    0xFCEBDD, 0x5A3522, 0x9A6A50, 0xF2D5BE, 0xD9895B, false},
+    {"midnight", 0x141A2A, 0xE8ECF5, 0x8E9AB8, 0x232C42, 0x9DB4E8, true},
+};
+
+// The accent picked in the app, in a tone for light paper and one for dark.
+// Keep the ids in step with lib/devices/accents.ts and the accent CHECK.
+static const AccentSpec kAccents[] = {
+    {"rose",     0xD98A8A, 0xE8A5B0},
+    {"blush",    0xE29E95, 0xF2B8AE},
+    {"plum",     0x8B6A77, 0xC9A9B6},
+    {"sage",     0x6F8F74, 0x9FC0A4},
+    {"cream",    0xC9A77E, 0xE4CFA8},
+    {"lavender", 0x8B7BB8, 0xB4A7DE},
+    {"sky",      0x5E8DB3, 0x9DB4E8},
+    {"peach",    0xD9895B, 0xF0B08A},
+};
+
+static ThemePalette paletteFromSpec(const ThemeSpec& t) {
   ThemePalette p{};
-  const String& t = gThemeId.length() ? gThemeId : String("cream");
-  const String& a = gAccentId;
-
-  auto accentFromId = [&](const String& id) -> uint16_t {
-    if (id == "rose") return 0xF813;
-    if (id == "blush") return 0xEC9D;
-    if (id == "plum") return 0x801F;
-    if (id == "sage") return 0x3529;
-    if (id == "cream") return 0xBDD7;
-    return 0xF813;
-  };
-
-  uint16_t acc = accentFromId(a.length() ? a : String("rose"));
-
-  if (t == "blush") {
-    p.bg = 0x2008;
-    p.headerBar = 0x380C;
-    p.accent = acc;
-    p.title = 0xFFFF;
-    p.body = 0xFFDD;
-    p.subtle = 0xC99A;
-    p.notePanel         = 0xFFFA;  // warm paper (rose-tinted cream)
-    p.noteFg            = 0x6A2C;  // deep warm brown
-    p.noteFooterOnBlack = 0xFC98;  // soft rose on black
-    p.noteEmoji         = 0x8C28;  // dusty rose-brown icons
-  } else if (t == "plum") {
-    p.bg = 0x0804;
-    p.headerBar = 0x1806;
-    p.accent = acc;
-    p.title = 0xFFFF;
-    p.body = 0xF79E;
-    p.subtle = 0xB5B6;
-    p.notePanel         = 0xDCD8;  // cool lilac paper
-    p.noteFg            = 0x2006;  // near-black plum
-    p.noteFooterOnBlack = 0xCDBC;  // muted lilac on black
-    p.noteEmoji         = 0x4C29;  // mauve icons on panel
-  } else if (t == "sage") {
-    p.bg = 0x0208;
-    p.headerBar = 0x032C;
-    p.accent = acc;
-    p.title = 0xFFFF;
-    p.body = 0xE6F2;
-    p.subtle = 0x8C99;
-    p.notePanel         = 0xE7F6;  // soft sage paper
-    p.noteFg            = 0x1A28;  // deep forest brown
-    p.noteFooterOnBlack = 0x9ED3;  // sage mist on black
-    p.noteEmoji         = 0x3546;  // muted green-brown icons
-  } else {
-    // cream (default) — original warm letter card
-    p.bg = 0x0000;
-    p.headerBar = 0x1082;
-    p.accent = acc;
-    p.title = 0xFFFF;
-    p.body = 0xF79E;
-    p.subtle = 0x8C71;
-    p.notePanel         = 0xF7BB;  // #F5F5DC beige
-    p.noteFg            = 0x7B0C;  // warm brown body
-    p.noteFooterOnBlack = 0xCD2C;  // light brown on black footer
-    p.noteEmoji         = 0x3A26;  // chocolate MDI stickers
+  p.paper  = rgb(t.paper);
+  p.ink    = rgb(t.ink);
+  p.muted  = rgb(t.muted);
+  p.line   = rgb(t.line);
+  p.dark   = t.dark;
+  p.alert  = t.dark ? rgb(0xF09A95) : rgb(0xB85450);
+  p.accent = rgb(t.accent);
+  for (const AccentSpec& a : kAccents) {
+    if (gAccentId == a.id) {
+      p.accent = rgb(t.dark ? a.onDark : a.onLight);
+      break;
+    }
   }
   return p;
 }
+
+static const ThemeSpec& themeSpec(const String& id) {
+  for (const ThemeSpec& t : kThemes) {
+    if (id == t.id) return t;
+  }
+  return kThemes[0];  // unknown or empty: cream, the app's own look
+}
+
+// The chrome screens: header, pairing, waiting, updating, problems.
+ThemePalette paletteForDesk() {
+  return paletteFromSpec(themeSpec(gThemeId));
+}
+
+// Note screens follow the "message card" setting from the app instead:
+// light = cream paper, dark = midnight, match_theme = the desk's theme.
+static ThemePalette notePalette() {
+  String mode = gNoteCardBackground;
+  mode.trim();
+  mode.toLowerCase();
+  if (mode == "light") return paletteFromSpec(themeSpec("cream"));
+  if (mode == "dark") return paletteFromSpec(themeSpec("midnight"));
+  return paletteForDesk();
+}
+
+// Whatever the last full-screen paint used, so an overlay (the status line,
+// a tap's "Checking…") paints in the same paper.
+static ThemePalette gScreen = {0xFFFF, 0, 0x8410, 0xC618, 0xF813, 0xF800, false};
 
 // Note bodies: UTF-8 emoji (incl. skin tones / VS16) match kEmoji; Twemoji-based
 // RGB565 sprites in emoji_assets.gen.h render as color on the TFT next to text.
@@ -577,8 +621,41 @@ static const EmojiUtf8 kEmoji[] = {
 static_assert(sizeof(kEmoji) / sizeof(kEmoji[0]) == EMOJI_TABLE_ROWS,
               "kEmoji rows out of sync — run scripts/gen_emoji_assets.py");
 
-// Walk UTF-8 note body: ASCII words, explicit line breaks, Twemoji sprites (see
-// emoji_assets.gen.h). Unknown UTF-8 becomes '*' in the text stream.
+// What desk_fonts.gen.h covers beyond ASCII: Latin-1, plus what phone
+// keyboards substitute on their own. Keep in step with SMART in
+// scripts/gen_desk_fonts.py.
+static const uint16_t kSmartGlyphs[] = {0x2013, 0x2014, 0x2018, 0x2019, 0x201C,
+                                        0x201D, 0x2022, 0x2026, 0x20AC, 0x2122};
+
+static bool deskFontHasGlyph(uint32_t cp) {
+  if (cp >= 0x20 && cp < 0x7F) return true;
+  if (cp >= 0xA0 && cp <= 0xFF) return true;
+  for (uint16_t g : kSmartGlyphs) {
+    if (cp == g) return true;
+  }
+  return false;
+}
+
+static uint32_t utf8CodePoint(const String& in, size_t i, size_t len) {
+  const uint8_t* p = (const uint8_t*)in.c_str() + i;
+  if (len == 2) return ((uint32_t)(p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+  if (len == 3) return ((uint32_t)(p[0] & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+  if (len == 4)
+    return ((uint32_t)(p[0] & 0x07) << 18) | ((uint32_t)(p[1] & 0x3F) << 12) |
+           ((uint32_t)(p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+  return p[0];
+}
+
+// Bytes in the UTF-8 sequence starting with `b0` (1 for ASCII or garbage).
+static size_t utf8SeqLen(uint8_t b0) {
+  if ((b0 & 0xE0) == 0xC0) return 2;
+  if ((b0 & 0xF0) == 0xE0) return 3;
+  if ((b0 & 0xF8) == 0xF0) return 4;
+  return 1;
+}
+
+// Walk UTF-8 note body: words, explicit line breaks, sticker sprites (see
+// emoji_assets.gen.h). Characters the desk font lacks become '*'.
 static void tokenizeNoteBodyItems(const String& in, std::vector<NoteBodyItem>& out) {
   out.clear();
   String word;
@@ -639,47 +716,107 @@ static void tokenizeNoteBodyItems(const String& in, std::vector<NoteBodyItem>& o
       skip = 3;
     else if ((b0 & 0xF8) == 0xF0 && i + 3 < in.length())
       skip = 4;
-    word += '*';
+    // Keep what the desk font can draw (accents, smart quotes, dashes) as
+    // UTF-8 — TFT_eSPI decodes it — and mark anything else with '*'.
+    if (deskFontHasGlyph(utf8CodePoint(in, i, skip))) {
+      word += in.substring(i, i + skip);
+    } else {
+      word += '*';
+    }
     i += skip;
   }
   flushWord();
 }
 
 // ---------------------------------------------------------------------------
-// Drawing helpers — GLCD font (1) + integer scale = chunky bitmap / “pixel” UI.
-// Pairing code keeps font 7 (segment digits). See LOAD_GLCD in User_Setup.h.
+// Type. Every screen but Wi-Fi setup uses Fraunces as anti-aliased smooth
+// fonts from desk_fonts.gen.h; TFT_eSPI blends each glyph into the colour
+// passed as the text background, so text always sits on a known paper.
 // ---------------------------------------------------------------------------
-static constexpr uint8_t kDeskFontScaleXL   = 3;
-static constexpr uint8_t kDeskFontScaleBody = 2;
-static constexpr uint8_t kDeskFontScaleNote = 3;
+static FontSpec fontSpec(DeskFont f) {
+  switch (f) {
+    case DeskFont::Note30:   return {kFont_note30, kFontSpace_note30};
+    case DeskFont::Note24:   return {kFont_note24, kFontSpace_note24};
+    case DeskFont::Note19:   return {kFont_note19, kFontSpace_note19};
+    case DeskFont::Note16:   return {kFont_note16, kFontSpace_note16};
+    case DeskFont::Head17:   return {kFont_head17, kFontSpace_head17};
+    case DeskFont::Meta13:   return {kFont_meta13, kFontSpace_meta13};
+    case DeskFont::Foot14:   return {kFont_foot14, kFontSpace_foot14};
+    case DeskFont::Digits32: return {kFont_digits32, kFontSpace_digits32};
+  }
+  return {kFont_meta13, kFontSpace_meta13};
+}
 
-static inline void deskFontChromeTitle() {
-  tft.setTextFont(1);
-  tft.setTextSize(kDeskFontScaleXL);
+static const uint8_t* gLoadedFont = nullptr;
+
+static void useFont(DeskFont f) {
+  const FontSpec spec = fontSpec(f);
+  if (gLoadedFont != spec.data) {
+    tft.loadFont(spec.data);  // unloads the previous one itself
+    gLoadedFont = spec.data;
+  }
+  // TFT_eSPI never reads the space glyph and guesses its width instead; put
+  // the real advance back so words space the way Fraunces intends.
+  tft.gFont.spaceWidth = spec.space;
 }
-static inline void deskFontChromeMeta() {
+
+// The Wi-Fi setup screens were laid out, touch targets and all, for the
+// built-in 5×7 font. With a smooth font loaded TFT_eSPI would draw every
+// print in it, so they drop back to the bitmap font explicitly.
+static void useGlcd(uint8_t size) {
+  if (gLoadedFont) {
+    tft.unloadFont();
+    gLoadedFont = nullptr;
+  }
   tft.setTextFont(1);
-  tft.setTextSize(kDeskFontScaleBody);
+  tft.setTextSize(size);
 }
-static inline void deskFontBody() {
-  tft.setTextFont(1);
-  tft.setTextSize(kDeskFontScaleBody);
+
+static int16_t fontLineH() { return (int16_t)tft.gFont.yAdvance; }
+
+static void drawTextAt(const String& text, DeskFont f, int16_t x, int16_t y, uint16_t fg,
+                       uint16_t bg) {
+  useFont(f);
+  tft.setTextColor(fg, bg);
+  tft.setCursor(x, y);
+  tft.print(text);
 }
-static inline void deskFontNote() {
-  tft.setTextFont(1);
-  tft.setTextSize(kDeskFontScaleNote);
+
+static void drawTextCentered(const String& text, DeskFont f, int16_t y, uint16_t fg,
+                             uint16_t bg) {
+  useFont(f);
+  const int16_t w = tft.textWidth(text);
+  drawTextAt(text, f, (int16_t)((tft.width() - w) / 2), y, fg, bg);
 }
-static inline void deskFontNoteScaled(uint8_t scale) {
-  tft.setTextFont(1);
-  tft.setTextSize(scale);
-}
-static inline void deskFontLittleTap() {
-  tft.setTextFont(1);
-  tft.setTextSize(1);
-}
-static inline void deskFontPairingDigits() {
-  tft.setTextFont(7);
-  tft.setTextSize(1);
+
+// Word-wrapped, centred, at most `maxLines`. Returns the y below the block.
+static int16_t drawTextWrapped(const String& text, DeskFont f, int16_t y, int16_t maxW,
+                               uint16_t fg, uint16_t bg, uint8_t maxLines) {
+  useFont(f);
+  const int16_t lh = (int16_t)(fontLineH() + 3);
+  String line;
+  uint8_t lines = 0;
+  size_t i = 0;
+  while (i <= text.length() && lines < maxLines) {
+    int sp = text.indexOf(' ', i);
+    if (sp < 0) sp = text.length();
+    const String word = text.substring(i, sp);
+    const String trial = line.length() ? line + " " + word : word;
+    if (line.length() && tft.textWidth(trial) > maxW) {
+      drawTextCentered(line, f, y, fg, bg);
+      y += lh;
+      ++lines;
+      line = word;
+    } else {
+      line = trial;
+    }
+    i = sp + 1;
+  }
+  if (line.length() && lines < maxLines) {
+    drawTextCentered(line, f, y, fg, bg);
+    y += lh;
+  }
+  return y;
 }
 
 // MDI glyphs are stored at native EMOJI_SPRITE_P×EMOJI_SPRITE_P (see emoji_assets.gen.h).
@@ -723,9 +860,13 @@ static void drawEmojiBitmap(const uint8_t* data, int16_t x, int16_t y,
   --gTftSketchWriteDepth;
 }
 
-// Draw a raw 1bpp frame scaled to outPx×outPx (nearest-neighbor downsample).
+// Draw a raw 1bpp frame scaled down to outPx×outPx, anti-aliased: each output
+// pixel is the share of its source block that is set, blended from `bg` to
+// `tintColor` — the same smoothing the Fraunces text gets, so a sticker sits
+// next to the words instead of looking pixelated beside them. `bg` must be
+// what is already underneath (the paper); unset blocks are left untouched.
 static void drawEmojiBitmapSized(const uint8_t* data, int16_t x, int16_t y,
-                                 uint16_t tintColor, int16_t outPx) {
+                                 uint16_t tintColor, uint16_t bg, int16_t outPx) {
   if (outPx >= EMOJI_SPRITE_PX) {
     drawEmojiBitmap(data, x, y, tintColor, 1);
     return;
@@ -733,15 +874,36 @@ static void drawEmojiBitmapSized(const uint8_t* data, int16_t x, int16_t y,
   ++gTftSketchWriteDepth;
   tft.startWrite();
   for (int oy = 0; oy < outPx; ++oy) {
-    const int spy = oy * EMOJI_SPRITE_PX / outPx;
+    const int sy0 = oy * EMOJI_SPRITE_PX / outPx;
+    int       sy1 = (oy + 1) * EMOJI_SPRITE_PX / outPx;
+    if (sy1 <= sy0) sy1 = sy0 + 1;
     for (int ox = 0; ox < outPx; ++ox) {
-      const int spx = ox * EMOJI_SPRITE_PX / outPx;
-      if (emojiBitSet(data, spy * EMOJI_SPRITE_PX + spx))
-        tft.drawPixel(x + ox, y + oy, tintColor);
+      const int sx0 = ox * EMOJI_SPRITE_PX / outPx;
+      int       sx1 = (ox + 1) * EMOJI_SPRITE_PX / outPx;
+      if (sx1 <= sx0) sx1 = sx0 + 1;
+      int set = 0;
+      for (int sy = sy0; sy < sy1; ++sy) {
+        for (int sx = sx0; sx < sx1; ++sx) {
+          if (emojiBitSet(data, sy * EMOJI_SPRITE_PX + sx)) ++set;
+        }
+      }
+      if (set == 0) continue;
+      const int     total = (sy1 - sy0) * (sx1 - sx0);
+      const uint8_t alpha = (uint8_t)(set * 255 / total);
+      tft.drawPixel(x + ox, y + oy,
+                    alpha >= 250 ? tintColor : tft.alphaBlend(alpha, tintColor, bg));
     }
   }
   tft.endWrite();
   --gTftSketchWriteDepth;
+}
+
+// Sprite index for a sticker by its kEmoji name ("heartln"), or 0xFF.
+static uint8_t spriteUidNamed(const char* rep) {
+  for (size_t k = 0; k < sizeof(kEmoji) / sizeof(kEmoji[0]); ++k) {
+    if (strcmp(kEmoji[k].rep, rep) == 0) return kEmojiRowSpriteIdx[k];
+  }
+  return 0xFF;
 }
 
 static void drawEmojiSprite(int16_t x, int16_t y, uint8_t spriteUid,
@@ -799,51 +961,37 @@ void tickEmojiAnimations() {
             ? kEmojiSpriteData[s.uid]
             : kEmojiAnimFrames[kEmojiAnimStart[s.uid] + (frame - 1)];
     tft.fillRect(s.x, s.y, s.outPx, s.outPx, s.bg);
-    drawEmojiBitmapSized(data, s.x, s.y, s.tint, s.outPx);
+    drawEmojiBitmapSized(data, s.x, s.y, s.tint, s.bg, s.outPx);
   }
 }
 
-// On-screen emoji width for a given GLCD text scale (sprite is downsampled when smaller).
-static int16_t emojiLayoutPxForTextScale(uint8_t textScale) {
-  if (textScale >= 3) return (int16_t)EMOJI_SPRITE_PX;
-  if (textScale == 2) return (int16_t)((EMOJI_SPRITE_PX * 2 + 1) / 3);
-  return (int16_t)(EMOJI_SPRITE_PX / 2);
-}
-
-// Draw MDI sprite scaled to outPx×outPx (nearest-neighbor). outPx >= EMOJI_SPRITE_PX uses
-// the fast 1:1 path in drawEmojiSprite.
+// Draw a sticker at outPx×outPx over `bg`, anti-aliased when scaled down.
 static void drawEmojiSpriteSized(int16_t x, int16_t y, uint8_t spriteUid, uint16_t tintColor,
-                                 int16_t outPx) {
+                                 uint16_t bg, int16_t outPx) {
   if (spriteUid >= EMOJI_UNIQUE_SPRITES || outPx < 1) return;
-  drawEmojiBitmapSized(kEmojiSpriteData[spriteUid], x, y, tintColor, outPx);
+  drawEmojiBitmapSized(kEmojiSpriteData[spriteUid], x, y, tintColor, bg, outPx);
 }
 
-static int16_t measureNoteItemWidth(const NoteBodyItem& it, uint8_t textScale,
-                                    int16_t emojiOutPx) {
+static int16_t measureNoteItemWidth(const NoteBodyItem& it, DeskFont font, int16_t emojiOutPx) {
   if (it.isEmoji) return (int16_t)(emojiOutPx + 4);
-  deskFontNoteScaled(textScale);
-  return tft.textWidth(it.text.c_str());
+  useFont(font);
+  return tft.textWidth(it.text);
 }
 
-static uint16_t noteLineHeightForLayout(uint8_t textScale, int16_t emojiOutPx,
-                                        bool tightTextPad) {
-  const int16_t  kTextLinePx = (int16_t)(8 * textScale);
-  const uint16_t textPad     = tightTextPad ? 4u : 8u;
-  const uint16_t lhText      = (uint16_t)(kTextLinePx + textPad);
-  const uint16_t lhEmoji     = (uint16_t)((uint16_t)emojiOutPx + 6u);
+static uint16_t noteLineHeightForLayout(DeskFont font, int16_t emojiOutPx, int16_t leading) {
+  useFont(font);
+  const uint16_t lhText  = (uint16_t)(fontLineH() + leading);
+  const uint16_t lhEmoji = (uint16_t)(emojiOutPx + 4);
   return lhText > lhEmoji ? lhText : lhEmoji;
 }
 
-static void collectWrappedNoteRows(const std::vector<NoteBodyItem>& items,
-                                   int16_t                      xMargin,
-                                   uint8_t                     textScale,
-                                   int16_t                      emojiOutPx,
+static void collectWrappedNoteRows(const std::vector<NoteBodyItem>& items, int16_t innerW,
+                                   DeskFont font, int16_t emojiOutPx,
                                    std::vector<std::vector<NoteBodyItem>>& rowsOut) {
   rowsOut.clear();
   std::vector<NoteBodyItem> row;
-  deskFontNoteScaled(textScale);
+  useFont(font);
   const int16_t spaceW = tft.textWidth(" ");
-  const int16_t innerW = tft.width() - 2 * xMargin;
 
   for (size_t i = 0; i < items.size(); ++i) {
     const NoteBodyItem& it = items[i];
@@ -859,12 +1007,12 @@ static void collectWrappedNoteRows(const std::vector<NoteBodyItem>& items,
     int32_t w = 0;
     for (size_t j = 0; j < trial.size(); ++j) {
       if (j > 0) w += spaceW;
-      w += measureNoteItemWidth(trial[j], textScale, emojiOutPx);
+      w += measureNoteItemWidth(trial[j], font, emojiOutPx);
     }
     if (w <= (int32_t)innerW || row.empty()) {
       row = trial;
     } else {
-      if (!row.empty()) rowsOut.push_back(row);
+      rowsOut.push_back(row);
       row.clear();
       row.push_back(it);
     }
@@ -872,309 +1020,214 @@ static void collectWrappedNoteRows(const std::vector<NoteBodyItem>& items,
   if (!row.empty()) rowsOut.push_back(row);
 }
 
+// Top of every non-note screen: a small heart, "DeskNote", the version, a
+// hairline. Paints the whole panel in the theme's paper first.
+static constexpr int16_t kHeaderH = 44;
+
 void drawChromeHeader() {
   gAnimSlots.clear();  // chrome screens have no note card to animate on
-  ThemePalette pal = paletteForDesk();
-  tft.fillScreen(pal.bg);
-  tft.fillRoundRect(0, 0, tft.width(), 52, 10, pal.headerBar);
+  gScreen = paletteForDesk();
+  tft.fillScreen(gScreen.paper);
 
-  tft.setTextColor(pal.title, pal.headerBar);
-  deskFontChromeTitle();
-  tft.setCursor(12, 8);
-  tft.print("DeskNote");
-
-  tft.setTextColor(pal.subtle, pal.headerBar);
-  deskFontChromeMeta();
-  tft.setCursor(12, 34);
-  tft.print("For two");
+  const uint8_t heart = spriteUidNamed("heartln");
+  if (heart != 0xFF) drawEmojiSpriteSized(16, 14, heart, gScreen.accent, gScreen.paper, 16);
+  drawTextAt("DeskNote", DeskFont::Head17, 38, 12, gScreen.ink, gScreen.paper);
 
   // Firmware build — matches kFirmwareVersion; server syncs via X-Firmware-Version.
+  useFont(DeskFont::Meta13);
   const String ver = kFirmwareVersion;
-  deskFontChromeMeta();
-  const int16_t tw = tft.textWidth(ver.c_str());
-  tft.setTextColor(pal.accent, pal.headerBar);
-  tft.setCursor(tft.width() - tw - 10, 14);
-  tft.print(ver);
+  drawTextAt(ver, DeskFont::Meta13, (int16_t)(tft.width() - tft.textWidth(ver) - 16), 16,
+             gScreen.muted, gScreen.paper);
+
+  tft.drawFastHLine(16, kHeaderH, (int16_t)(tft.width() - 32), gScreen.line);
 }
 
+// One quiet line along the bottom. Callers still pass the old signal colours;
+// they map onto the current screen's palette so a status never shouts.
 void drawStatus(const String& status, uint16_t color = TFT_WHITE) {
-  ThemePalette pal = paletteForDesk();
-  const int16_t y = 210;
-  tft.fillRect(0, y - 5, tft.width(), 35, pal.bg);
+  uint16_t c = color;
+  if (color == TFT_WHITE) c = gScreen.muted;
+  else if (color == TFT_GREEN) c = gScreen.accent;
+  else if (color == TFT_RED) c = gScreen.alert;
 
-  tft.setTextColor(color, pal.bg);
-  deskFontChromeMeta();
-  tft.setCursor(10, y);
-  tft.print(status);
+  const int16_t y = 214;
+  tft.fillRect(0, y - 4, tft.width(), (int16_t)(tft.height() - (y - 4)), gScreen.paper);
+  drawTextCentered(status, DeskFont::Meta13, y, c, gScreen.paper);
 }
 
 void clearBody() {
-  ThemePalette pal = paletteForDesk();
-  tft.fillRect(0, 58, tft.width(), 152, pal.bg);
+  tft.fillRect(0, kHeaderH + 2, tft.width(), (int16_t)(208 - (kHeaderH + 2)), gScreen.paper);
 }
 
 void drawPairingCode(const String& code) {
   drawChromeHeader();
-  ThemePalette pal = paletteForDesk();
-  clearBody();
+  drawTextCentered("Pair this desk", DeskFont::Note24, 58, gScreen.ink, gScreen.paper);
 
-  tft.setTextColor(pal.accent, pal.bg);
-  deskFontBody();
-  tft.setCursor(10, 70);
-  tft.print("Pairing code");
+  // One soft box per digit, like a code you'd read off a card.
+  constexpr int16_t boxW = 40, boxH = 52, gap = 8, y = 98;
+  const int16_t n     = (int16_t)code.length();
+  const int16_t total = (int16_t)(n * boxW + (n - 1) * gap);
+  int16_t       x     = (int16_t)((tft.width() - total) / 2);
+  useFont(DeskFont::Digits32);
+  for (int16_t i = 0; i < n; ++i) {
+    tft.fillRoundRect(x, y, boxW, boxH, 9, gScreen.line);
+    tft.fillRoundRect(x + 2, y + 2, boxW - 4, boxH - 4, 7, gScreen.paper);
+    const String d = code.substring(i, i + 1);
+    const int16_t dw = tft.textWidth(d);
+    drawTextAt(d, DeskFont::Digits32, (int16_t)(x + (boxW - dw) / 2),
+               (int16_t)(y + (boxH - fontLineH()) / 2), gScreen.ink, gScreen.paper);
+    x += boxW + gap;
+  }
 
-  // Font 7 is the built-in 7-segment style font; digits-only. Our pairing
-  // codes are 6 decimal digits, which matches.
-  tft.setTextColor(pal.title, pal.bg);
-  deskFontPairingDigits();
-  tft.setCursor(10, 96);
-  tft.print(code);
+  drawTextCentered("Enter this code in the DeskNote app", DeskFont::Meta13, 164,
+                   gScreen.muted, gScreen.paper);
 }
 
 void drawWaitingForNote(const String& deskName,
                         const String& deskLocation,
                         const String& ownerName) {
+  (void)ownerName;
   drawChromeHeader();
-  ThemePalette pal = paletteForDesk();
-  clearBody();
 
-  tft.setTextColor(pal.accent, pal.bg);
-  deskFontBody();
-  tft.setCursor(10, 68);
-  tft.print("Paired");
+  const uint8_t hearts = spriteUidNamed("hearts");
+  if (hearts != 0xFF) {
+    drawEmojiSpriteSized((int16_t)((tft.width() - 32) / 2), 62, hearts, gScreen.accent,
+                         gScreen.paper, 32);
+  }
+  drawTextCentered("Waiting for a note", DeskFont::Note24, 104, gScreen.ink, gScreen.paper);
 
-  // Line 2: desk name (the one you typed in the pair form). Provides clear
-  // visual proof that the correct account claimed this hardware.
-  tft.setTextColor(pal.title, pal.bg);
-  deskFontBody();
-  tft.setCursor(10, 100);
-  if (deskName.length()) {
-    tft.print(deskName);
-  } else {
-    tft.print("This desk");
-  }
-
-  tft.setTextColor(pal.subtle, pal.bg);
-  deskFontChromeMeta();
-  tft.setCursor(10, 138);
-  String sub;
-  if (deskLocation.length()) {
-    sub += deskLocation;
-  }
-  if (ownerName.length()) {
-    if (sub.length()) sub += "  -  ";
-    sub += "on ";
-    sub += ownerName;
-    sub += "'s account";
-  }
-  if (sub.length() == 0) {
-    sub = "Waiting for notes from your partner...";
-  }
-  tft.print(sub);
+  // Proof the right account claimed this hardware: the name typed when pairing.
+  String sub = deskName.length() ? deskName : String("This desk");
+  if (deskLocation.length()) sub += " \xC2\xB7 " + deskLocation;  // middle dot
+  drawTextCentered(sub, DeskFont::Meta13, 140, gScreen.muted, gScreen.paper);
 }
 
-// Approximate luma for RGB565 — used to force light text on dark note panels.
-static bool rgb565PanelIsDark(uint16_t c) {
-  const uint32_t r = (uint32_t)((c >> 11) & 31) * 255 / 31;
-  const uint32_t g = (uint32_t)((c >> 5) & 63) * 255 / 63;
-  const uint32_t b = (uint32_t)(c & 31) * 255 / 31;
-  const int32_t  y = (int32_t)((77 * r + 150 * g + 29 * b) >> 8);
-  return y < 100;
-}
-
-// gNoteCardBackground: light | dark | match_theme (from web app).
-static void resolveNoteCardPaint(const ThemePalette& pal, uint16_t& panel, uint16_t& fg,
-                                 uint16_t& footerOnBlack, uint16_t& emoji) {
-  String mode = gNoteCardBackground.length() ? gNoteCardBackground : String("match_theme");
-  mode.trim();
-  mode.toLowerCase();
-
-  if (mode == String("light")) {
-    panel          = 0xF7BB;
-    fg             = 0x7B0C;
-    footerOnBlack  = 0xCD2C;
-    emoji          = 0x3A26;
-  } else if (mode == String("dark")) {
-    panel          = 0x2104;
-    fg             = 0xFFDD;
-    footerOnBlack  = 0xBDF7;
-    emoji          = 0xCE79;
-  } else {
-    panel          = pal.notePanel;
-    fg             = pal.noteFg;
-    footerOnBlack  = pal.noteFooterOnBlack;
-    emoji          = pal.noteEmoji;
-    if (rgb565PanelIsDark(panel)) {
-      fg    = 0xFFDD;
-      emoji = 0xDEDB;
-    }
-  }
-}
-
-// Full-screen centered note (pixel GLCD + MDI sprites). Outer frame stays black;
-// rounded panel + text + emoji from note-card mode (light / dark / match theme).
+// The note: the whole panel in paper, the words set in Fraunces as large as
+// they will go (stepping down through four sizes for a long note), stickers
+// in the accent colour, and "— for <desk>" in italics underneath.
 //
-// typingDelayMs > 0 makes text + emoji reveal progressively (like a typewriter).
-// The card, hearts, and positioning are still painted in one go first, so we
-// only inch through the body; the screen doesn't flicker between characters.
-// Pass 0 for any "redraw to update state" path (footer hide, tap timeout) so
-// those feel instantaneous.
+// typingDelayMs > 0 reveals the words a character (and a sticker) at a time;
+// the paper and footer are painted first so nothing flickers. Pass 0 for any
+// "redraw to update state" path (footer hide, tap timeout, a theme change).
+static constexpr int16_t kNoteFooterH = 30;
+
 void drawMessageScreen(const String& mainBody, const String& deskName, bool showFooter,
                        const String& messageType, const String& tapBody,
                        uint8_t typingDelayMs = 0) {
-  const ThemePalette pal = paletteForDesk();
-  uint16_t          kNoteBeige, kNoteFg, kNoteFgFooter, kEmojiBrown;
-  resolveNoteCardPaint(pal, kNoteBeige, kNoteFg, kNoteFgFooter, kEmojiBrown);
-  constexpr int16_t kFrame     = 8;
-  constexpr int16_t kPanelPad  = 10;
-  constexpr int16_t kTapGap    = 8;
+  const ThemePalette pal = notePalette();
+  gScreen = pal;
+  constexpr int16_t kPadX = 22;
+  constexpr int16_t kPadY = 20;
+  constexpr int16_t kTapGap = 8;
 
-  gAnimSlots.clear();  // repopulated below as emoji land on the fresh card
-  tft.fillScreen(TFT_BLACK);
+  gAnimSlots.clear();  // repopulated below as stickers land on the fresh page
+  tft.fillScreen(pal.paper);
 
-  deskFontChromeMeta();
-  const int16_t footerLineH = (int16_t)(8 * kDeskFontScaleBody + 4);
-  const int16_t footerY =
-      showFooter ? (int16_t)(tft.height() - 10 - footerLineH) : (int16_t)(tft.height());
-  // Beige layer stops above the footer strip so the label reads on black.
-  const int16_t beigeBottom =
-      showFooter ? (int16_t)(footerY - 8) : (int16_t)(tft.height() - kFrame);
-  const int16_t beigeH = (int16_t)(beigeBottom - kFrame);
-  if (beigeH > 28) {
-    tft.fillRoundRect(kFrame, kFrame, (int16_t)(tft.width() - 2 * kFrame), beigeH, 12,
-                      kNoteBeige);
-  }
+  const int16_t innerW        = (int16_t)(tft.width() - 2 * kPadX);
+  const int16_t contentTop    = kPadY;
+  const int16_t contentBottom = (int16_t)(tft.height() - (showFooter ? kNoteFooterH + 6 : kPadY));
 
-  const int16_t xMargin = (int16_t)(kFrame + kPanelPad);
-  const int16_t innerW    = (int16_t)(tft.width() - 2 * xMargin);
   std::vector<NoteBodyItem> items;
   tokenizeNoteBodyItems(mainBody, items);
 
-  const int16_t contentBottom = (int16_t)(beigeBottom - kPanelPad);
-  const int16_t contentTop    = (int16_t)(kFrame + kPanelPad);
-  const int32_t availHBase    = (int32_t)contentBottom - (int32_t)contentTop;
-  // Keep room for the quick-send line when it will be shown so the main block
-  // does not overlap it after we shrink-to-fit.
-  const bool reserveTapSpace =
-      (messageType == "quick_send" && tapBody.length() > 0);
-  deskFontLittleTap();
-  const int16_t tapLineH = (int16_t)(8 + 6);
-  const int32_t availH =
-      reserveTapSpace ? (availHBase - (int32_t)kTapGap - (int32_t)tapLineH) : availHBase;
+  const bool reserveTapSpace = (messageType == "quick_send" && tapBody.length() > 0);
+  useFont(DeskFont::Meta13);
+  const int16_t tapLineH = fontLineH();
+  const int32_t availH = (int32_t)(contentBottom - contentTop) -
+                         (reserveTapSpace ? (int32_t)(kTapGap + tapLineH) : 0);
 
-  std::vector<std::vector<NoteBodyItem>> rows;
-  uint8_t  noteScale       = 1;
-  int16_t  noteEmojiPx     = (int16_t)EMOJI_SPRITE_PX;
-  bool     noteTightTextPad = false;
-
-  auto layoutFits = [&](uint8_t ts, int16_t emPx, bool tightPad) -> bool {
-    collectWrappedNoteRows(items, xMargin, ts, emPx, rows);
-    const uint16_t lh = noteLineHeightForLayout(ts, emPx, tightPad);
-    if (!rows.empty() && (int32_t)rows.size() * (int32_t)lh > availH) return false;
-    deskFontNoteScaled(ts);
-    const int16_t sw = tft.textWidth(" ");
-    for (size_t ri = 0; ri < rows.size(); ++ri) {
-      int32_t rw = 0;
-      for (size_t j = 0; j < rows[ri].size(); ++j) {
-        if (j > 0) rw += sw;
-        rw += measureNoteItemWidth(rows[ri][j], ts, emPx);
-      }
-      if (rw > (int32_t)innerW) return false;
-    }
-    return true;
+  // Largest first. The last step trades leading and sticker size for room so
+  // even a 140-character note of long words still fits.
+  struct Step {
+    DeskFont font;
+    int16_t  emojiPx;
+    int16_t  leading;
+  };
+  static const Step kSteps[] = {
+      {DeskFont::Note30, 28, 6}, {DeskFont::Note24, 24, 5}, {DeskFont::Note19, 20, 4},
+      {DeskFont::Note16, 16, 3}, {DeskFont::Note16, 14, 1},
   };
 
-  bool found = false;
-  for (int s = kDeskFontScaleNote; s >= 1; --s) {
-    const int16_t em = emojiLayoutPxForTextScale((uint8_t)s);
-    if (layoutFits((uint8_t)s, em, false)) {
-      noteScale   = (uint8_t)s;
-      noteEmojiPx = em;
-      found       = true;
-      break;
-    }
-  }
-  if (!found) {
-    noteScale = 1;
-    int16_t em = emojiLayoutPxForTextScale(1);
-    for (; em >= 10; em -= 2) {
-      if (layoutFits(1, em, false)) {
-        noteEmojiPx = em;
-        found         = true;
-        break;
-      }
-    }
-    if (!found) {
-      for (em = 10; em >= 8; em -= 2) {
-        if (layoutFits(1, em, true)) {
-          noteEmojiPx      = em;
-          noteTightTextPad = true;
-          found              = true;
+  std::vector<std::vector<NoteBodyItem>> rows;
+  Step     step       = kSteps[sizeof(kSteps) / sizeof(kSteps[0]) - 1];
+  uint16_t lineHeight = 0;
+  for (const Step& candidate : kSteps) {
+    collectWrappedNoteRows(items, innerW, candidate.font, candidate.emojiPx, rows);
+    const uint16_t lh = noteLineHeightForLayout(candidate.font, candidate.emojiPx, candidate.leading);
+    bool fits = (int32_t)rows.size() * (int32_t)lh <= availH;
+    if (fits) {
+      useFont(candidate.font);
+      const int16_t sw = tft.textWidth(" ");
+      for (const auto& row : rows) {
+        int32_t rw = 0;
+        for (size_t j = 0; j < row.size(); ++j) {
+          if (j > 0) rw += sw;
+          rw += measureNoteItemWidth(row[j], candidate.font, candidate.emojiPx);
+        }
+        if (rw > innerW) {  // a single word wider than the page
+          fits = false;
           break;
         }
       }
     }
-    if (!found && layoutFits(1, 8, true)) {
-      noteEmojiPx      = 8;
-      noteTightTextPad = true;
-      found              = true;
-    }
-    if (!found) {
-      noteEmojiPx      = 8;
-      noteTightTextPad = true;
-      collectWrappedNoteRows(items, xMargin, 1, noteEmojiPx, rows);
-    }
+    step       = candidate;
+    lineHeight = lh;
+    if (fits) break;
   }
+  if (lineHeight == 0) lineHeight = noteLineHeightForLayout(step.font, step.emojiPx, step.leading);
 
-  deskFontNoteScaled(noteScale);
-  const int16_t  spaceW       = tft.textWidth(" ");
-  const int16_t  kTextLinePx  = (int16_t)(8 * noteScale);
-  const uint16_t lineHeight   = noteLineHeightForLayout(noteScale, noteEmojiPx, noteTightTextPad);
+  useFont(step.font);
+  const int16_t spaceW = tft.textWidth(" ");
+  const int16_t textH  = fontLineH();
 
   const int32_t totalMsgH = (int32_t)rows.size() * (int32_t)lineHeight;
-  const int32_t vertForMain =
-      reserveTapSpace ? (availHBase - (int32_t)kTapGap - (int32_t)tapLineH) : availHBase;
-  int16_t y0 = (int16_t)(contentTop + (vertForMain - totalMsgH) / 2);
+  int16_t y0 = (int16_t)(contentTop + (availH - totalMsgH) / 2);
   if (y0 < contentTop) y0 = contentTop;
 
   const bool showTap = (messageType == "quick_send" && tapBody.length() > 0 &&
                         gLittleTapUntilMs != 0 && millis() < gLittleTapUntilMs);
 
   for (size_t r = 0; r < rows.size(); ++r) {
+    const int16_t y = (int16_t)(y0 + (int32_t)r * (int32_t)lineHeight);
+    if (y + (int16_t)lineHeight > contentBottom + 4) break;  // never draw into the footer
+
     int32_t rw = 0;
     for (size_t j = 0; j < rows[r].size(); ++j) {
       if (j > 0) rw += spaceW;
-      rw += measureNoteItemWidth(rows[r][j], noteScale, noteEmojiPx);
+      rw += measureNoteItemWidth(rows[r][j], step.font, step.emojiPx);
     }
     int16_t x = (int16_t)((tft.width() - rw) / 2);
-    // Row top `y` — align both GLCD text and emoji to one horizontal band: center each
-    // in the line (previously only emoji was centered, so text sat high vs stickers).
-    int16_t y = (int16_t)(y0 + (int32_t)r * (int32_t)lineHeight);
-    const int16_t yText =
-        y + (int16_t)((lineHeight - kTextLinePx) / 2);
-    const int16_t yEmojiBase =
-        y + (int16_t)((lineHeight - noteEmojiPx) / 2);
+    const int16_t yText  = (int16_t)(y + ((int16_t)lineHeight - textH) / 2);
+    const int16_t yEmoji = (int16_t)(y + ((int16_t)lineHeight - step.emojiPx) / 2);
 
-    tft.setTextColor(kNoteFg, kNoteBeige);
     for (size_t i = 0; i < rows[r].size(); ++i) {
       const NoteBodyItem& it = rows[r][i];
       if (it.isEmoji) {
-        drawEmojiSpriteSized(x, yEmojiBase, it.spriteUid, kEmojiBrown, noteEmojiPx);
-        registerAnimEmoji(x, yEmojiBase, noteEmojiPx, it.spriteUid, kEmojiBrown,
-                          kNoteBeige);
-        x += (int16_t)(noteEmojiPx + 4);
-        // Emojis land with a slightly longer beat than individual characters —
-        // feels like the sender paused to drop in a reaction.
+        drawEmojiSpriteSized(x, yEmoji, it.spriteUid, pal.accent, pal.paper, step.emojiPx);
+        registerAnimEmoji(x, yEmoji, step.emojiPx, it.spriteUid, pal.accent, pal.paper);
+        x += (int16_t)(step.emojiPx + 4);
+        // A sticker lands with a slightly longer beat than a letter — like
+        // the sender paused to drop it in.
         if (typingDelayMs) delay((uint32_t)typingDelayMs * 2);
       } else {
-        deskFontNoteScaled(noteScale);
-        for (size_t c = 0; c < it.text.length(); ++c) {
-          const char ch = it.text[c];
+        useFont(step.font);
+        tft.setTextColor(pal.ink, pal.paper);
+        if (!typingDelayMs) {
           tft.setCursor(x, yText);
-          tft.print(ch);
-          char buf[2] = {ch, 0};
-          x += tft.textWidth(buf);
-          if (typingDelayMs) delay(typingDelayMs);
+          tft.print(it.text);
+          x += tft.textWidth(it.text);
+        } else {
+          // One character at a time — a whole UTF-8 sequence, never a byte,
+          // or accented letters would come apart mid-glyph.
+          for (size_t c = 0; c < it.text.length();) {
+            const size_t n = utf8SeqLen((uint8_t)it.text[c]);
+            const String g = it.text.substring(c, c + n);
+            tft.setCursor(x, yText);
+            tft.print(g);
+            x += tft.textWidth(g);
+            delay(typingDelayMs);
+            c += n;
+          }
         }
       }
       if (i + 1 < rows[r].size()) x += spaceW;
@@ -1182,57 +1235,29 @@ void drawMessageScreen(const String& mainBody, const String& deskName, bool show
   }
 
   if (showTap) {
-    deskFontLittleTap();
-    tft.setTextColor(kNoteFg, kNoteBeige);
     const int16_t tapY = (int16_t)(y0 + totalMsgH + kTapGap);
-    const int16_t tapW = tft.textWidth(tapBody.c_str());
-    int16_t tapX;
-    if (tapY + 14 < beigeBottom && tapW <= tft.width() - 2 * xMargin) {
-      tapX = (int16_t)((tft.width() - tapW) / 2);
-    } else if (tapY + 14 < beigeBottom) {
-      tapX = xMargin;  // long preset — clip from the left margin
-    } else {
-      tapX = -1;  // doesn't fit on screen at all
-    }
-    if (tapX >= 0) {
-      int16_t tx = tapX;
-      for (size_t c = 0; c < tapBody.length(); ++c) {
-        const char ch = tapBody[c];
-        tft.setCursor(tx, tapY);
-        tft.print(ch);
-        char buf[2] = {ch, 0};
-        tx += tft.textWidth(buf);
-        if (typingDelayMs) delay(typingDelayMs);
-      }
+    if (tapY + tapLineH <= contentBottom + 4) {
+      drawTextCentered(tapBody, DeskFont::Meta13, tapY, pal.muted, pal.paper);
     }
   }
 
   if (showFooter) {
-    deskFontChromeMeta();
-    int16_t x = xMargin;
-    tft.setTextColor(kNoteFgFooter, TFT_BLACK);
-    tft.setCursor(x, footerY);
-    tft.print("DeskNote-");
-    tft.print(deskName.length() ? deskName.c_str() : "Desk");
+    const String who = deskName.length() ? "\xE2\x80\x94 for " + deskName : String("\xE2\x80\x94 DeskNote");
+    drawTextCentered(who, DeskFont::Foot14, (int16_t)(tft.height() - kNoteFooterH + 4),
+                     pal.muted, pal.paper);
   }
 
-  // Offline banner: painted last so it overlays whichever footer variant was
-  // drawn above. Two-tone (dim red on black) keeps it readable against the
-  // beige card's shadow without screaming for attention.
+  // Offline: a small pill in the corner rather than a red bar. The last note
+  // stays readable; the pill just says it may be stale.
   if (!gServerReachable) {
-    deskFontChromeMeta();
-    const int16_t lineH = (int16_t)(8 * kDeskFontScaleBody + 4);
-    const int16_t y = (int16_t)(tft.height() - 6 - lineH);
-    const int16_t bandTop = (int16_t)(y - 4);
-    tft.fillRect(0, bandTop, tft.width(), (int16_t)(tft.height() - bandTop),
-                 TFT_BLACK);
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    const char* label = "! offline — last message shown";
-    const int16_t tw = tft.textWidth(label);
-    int16_t xT = (int16_t)((tft.width() - tw) / 2);
-    if (xT < 2) xT = 2;
-    tft.setCursor(xT, y);
-    tft.print(label);
+    useFont(DeskFont::Meta13);
+    const char*   label = "offline";
+    const int16_t w     = tft.textWidth(label);
+    const int16_t pillW = (int16_t)(w + 26);
+    const int16_t px    = (int16_t)(tft.width() - pillW - 8);
+    tft.fillRoundRect(px, 6, pillW, 20, 10, pal.line);
+    tft.fillCircle(px + 10, 16, 3, pal.alert);
+    drawTextAt(label, DeskFont::Meta13, (int16_t)(px + 18), 8, pal.muted, pal.line);
   }
 }
 
@@ -1255,29 +1280,12 @@ static void playTypingIntro(const String& mainPart, const String& tapPart,
 
 void drawErrorBox(const String& line1, const String& line2) {
   drawChromeHeader();
-  ThemePalette pal = paletteForDesk();
-  clearBody();
-
-  tft.setTextColor(TFT_RED, pal.bg);
-  deskFontBody();
-  tft.setCursor(10, 70);
-  tft.print("Problem");
-
-  const size_t maxChars = 50;
-  int16_t y = 108;
-  auto drawWrapped = [&](const String& line) {
-    tft.setTextColor(pal.body, pal.bg);
-    deskFontChromeMeta();
-    size_t i = 0;
-    while (i < line.length() && y < 205) {
-      tft.setCursor(10, y);
-      tft.print(line.substring(i, i + maxChars));
-      i += maxChars;
-      y += 18;
-    }
-  };
-  drawWrapped(line1);
-  drawWrapped(line2);
+  drawTextCentered("Something's not right", DeskFont::Note24, 60, gScreen.ink, gScreen.paper);
+  int16_t y = 100;
+  y = drawTextWrapped(line1, DeskFont::Meta13, y, (int16_t)(tft.width() - 48), gScreen.muted,
+                      gScreen.paper, 3);
+  drawTextWrapped(line2, DeskFont::Meta13, (int16_t)(y + 4), (int16_t)(tft.width() - 48),
+                  gScreen.muted, gScreen.paper, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -1517,6 +1525,7 @@ struct WifiApEntry {
 };
 
 static void drawProvHeader(const char* title) {
+  useGlcd(1);
   tft.fillScreen(TFT_BLACK);
   tft.fillRect(0, 0, tft.width(), 28, 0x18E3);  // subdued plum bar
   tft.setTextColor(TFT_WHITE, 0x18E3);
@@ -1774,6 +1783,7 @@ static bool runKeyboardEntry(const String& prompt, const String& initial,
 // Tries the provided ssid/pass and returns true on success. Blocks up to
 // WIFI_CONNECT_TIMEOUT_MS and draws a small "connecting..." indicator.
 static bool tryConnect(const String& ssid, const String& pass) {
+  useGlcd(1);
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(1);
@@ -1804,6 +1814,7 @@ static bool tryConnect(const String& ssid, const String& pass) {
 // or cancels back to the error screen. Called from connectWifi() when the
 // remembered SSID/pass don't work.
 bool provisionWifiViaTouch() {
+  useGlcd(1);  // these screens are laid out for the bitmap font
   touchInit();
 
   while (true) {
@@ -2091,22 +2102,15 @@ static uint32_t gLastScheduledFetchMs = 0;
 
 // True when (px,py) is on the main message surface (beige card or body), not chrome/status.
 static bool hitMessageFetchZone(int16_t px, int16_t py) {
-  const int16_t w = tft.width();
-  const int16_t h = tft.height();
-  constexpr int16_t kFrame = 8;
-
+  (void)px;
+  // A note (or the idle note) fills the page: anywhere above the footer.
   if (displayState == DisplayState::ShowingMessage ||
       (displayState == DisplayState::WaitingForNote && lastRenderedIdleBody.length() > 0)) {
-    const int16_t footerLineH = (int16_t)(8 * kDeskFontScaleBody + 4);
-    const bool    showFooter  = !gMessageFooterHidden;
-    const int16_t footerY =
-        showFooter ? (int16_t)(h - 10 - footerLineH) : (int16_t)h;
-    const int16_t beigeBottom =
-        showFooter ? (int16_t)(footerY - 8) : (int16_t)(h - kFrame);
-    return px >= kFrame && px < w - kFrame && py >= kFrame && py < beigeBottom;
+    return py < (int16_t)(tft.height() - kNoteFooterH);
   }
+  // "Waiting for a note": the body between the header and the status line.
   if (displayState == DisplayState::WaitingForNote) {
-    return px >= 10 && px < w - 10 && py >= 58 && py < (int16_t)(h - 40);
+    return py > kHeaderH && py < 208;
   }
   return false;
 }
@@ -2218,32 +2222,18 @@ void enterError(const String& line1, const String& line2) {
 // ---------------------------------------------------------------------------
 void drawSecretPlaceholder() {
   gAnimSlots.clear();
-  const ThemePalette pal = paletteForDesk();
-  uint16_t panel, fg, footerFg, emoji;
-  resolveNoteCardPaint(pal, panel, fg, footerFg, emoji);
+  gScreen = notePalette();
+  tft.fillScreen(gScreen.paper);
 
-  tft.fillScreen(TFT_BLACK);
-  tft.fillRoundRect(8, 8, (int16_t)(tft.width() - 16), (int16_t)(tft.height() - 16),
-                    12, panel);
-
-  deskFontNoteScaled(2);
-  tft.setTextColor(fg, panel);
-  const char* title = "A secret note";
-  int16_t tw = tft.textWidth(title);
-  tft.setCursor((int16_t)((tft.width() - tw) / 2), 84);
-  tft.print(title);
-
-  deskFontChromeMeta();
-  const char* hint = "Tap to reveal";
-  tw = tft.textWidth(hint);
-  tft.setCursor((int16_t)((tft.width() - tw) / 2), 126);
-  tft.print(hint);
-
-  deskFontLittleTap();
-  const char* sub = "tap again and it's gone forever";
-  tw = tft.textWidth(sub);
-  tft.setCursor((int16_t)((tft.width() - tw) / 2), 152);
-  tft.print(sub);
+  const uint8_t gift = spriteUidNamed("gift");
+  if (gift != 0xFF) {
+    drawEmojiSpriteSized((int16_t)((tft.width() - 36) / 2), 54, gift, gScreen.accent,
+                         gScreen.paper, 36);
+  }
+  drawTextCentered("A secret note", DeskFont::Note24, 102, gScreen.ink, gScreen.paper);
+  drawTextCentered("Tap to reveal", DeskFont::Meta13, 140, gScreen.muted, gScreen.paper);
+  drawTextCentered("Tap again and it's gone for good", DeskFont::Foot14, 164, gScreen.muted,
+                   gScreen.paper);
 }
 
 void enterSecretHidden(const String& body, const String& noteId) {
@@ -2305,34 +2295,33 @@ void dismissSecretNote() {
 // ota_rollback.cpp stops the Arduino core from marking a freshly installed
 // build valid the moment it boots; confirmFirmwareHealthy() does that instead.
 
-static void drawOtaProgress(int percent) {
-  ThemePalette pal = paletteForDesk();
-  const int16_t x = 10, y = 132, w = tft.width() - 20, h = 16;
-  const int16_t fill = (int16_t)((long)(w - 4) * constrain(percent, 0, 100) / 100);
-  tft.drawRoundRect(x, y, w, h, 5, pal.subtle);
-  tft.fillRect(x + 2, y + 2, fill, h - 4, pal.accent);
-  tft.fillRect(x + 2 + fill, y + 2, w - 4 - fill, h - 4, pal.bg);
+static constexpr int16_t kOtaBarX = 24, kOtaBarY = 124, kOtaBarH = 10;
 
-  tft.fillRect(x, y + h + 6, w, 16, pal.bg);
-  tft.setTextColor(pal.body, pal.bg);
-  deskFontBody();
-  tft.setCursor(x, y + h + 6);
-  tft.print(String(constrain(percent, 0, 100)) + "%");
+// Paints only the filled part and the number, over the track drawOtaScreen
+// laid down once — so the bar grows without flickering.
+static void drawOtaProgress(int percent) {
+  const int16_t w    = (int16_t)(tft.width() - 2 * kOtaBarX);
+  const int     pct  = constrain(percent, 0, 100);
+  const int16_t fill = (int16_t)((long)w * pct / 100);
+  if (fill > 0) {
+    tft.fillRoundRect(kOtaBarX, kOtaBarY, fill < kOtaBarH ? kOtaBarH : fill, kOtaBarH, 5,
+                      gScreen.accent);
+  }
+  const int16_t ty = (int16_t)(kOtaBarY + kOtaBarH + 10);
+  tft.fillRect(kOtaBarX, ty, 60, 18, gScreen.paper);
+  drawTextAt(String(pct) + "%", DeskFont::Meta13, kOtaBarX, ty, gScreen.muted, gScreen.paper);
 }
 
 static void drawOtaScreen(const String& title, const String& detail, int percent) {
   drawChromeHeader();
-  ThemePalette pal = paletteForDesk();
-  clearBody();
-  tft.setTextColor(pal.title, pal.bg);
-  deskFontBody();
-  tft.setCursor(10, 70);
-  tft.print(title);
-  tft.setTextColor(pal.subtle, pal.bg);
-  tft.setCursor(10, 98);
-  tft.print(detail);
-  if (percent >= 0) drawOtaProgress(percent);
-  drawStatus("Keep me plugged in.", pal.subtle);
+  drawTextAt(title, DeskFont::Note24, kOtaBarX, 62, gScreen.ink, gScreen.paper);
+  drawTextAt(detail, DeskFont::Meta13, kOtaBarX, 96, gScreen.muted, gScreen.paper);
+  if (percent >= 0) {
+    tft.fillRoundRect(kOtaBarX, kOtaBarY, (int16_t)(tft.width() - 2 * kOtaBarX), kOtaBarH, 5,
+                      gScreen.line);
+    drawOtaProgress(percent);
+  }
+  drawStatus("Keep me plugged in", TFT_WHITE);
 }
 
 // POST /api/device/ota — "downloading" when an install starts, "failed" with
@@ -2427,7 +2416,7 @@ static void installFirmwareUpdate(const LatestResult& offer) {
   Serial.printf("[ota] installing %s (%ld bytes) into %s\n", version.c_str(), size,
                 slot->label);
   reportOta(version, "downloading", "");
-  drawOtaScreen("Updating DeskNote", String(kFirmwareVersion) + " -> " + version, 0);
+  drawOtaScreen("Updating", String(kFirmwareVersion) + " to " + version, 0);
 
   // Free the MQTT socket and its TLS buffers for the duration; maintainMqtt()
   // reconnects if this ends up returning.
@@ -2523,7 +2512,7 @@ static void installFirmwareUpdate(const LatestResult& offer) {
   prefs.end();
 
   Serial.printf("[ota] %s written and verified; restarting\n", version.c_str());
-  drawOtaScreen("Update installed", "Restarting...", 100);
+  drawOtaScreen("Update installed", "Restarting\xE2\x80\xA6", 100);
   delay(1200);
   ESP.restart();
 }

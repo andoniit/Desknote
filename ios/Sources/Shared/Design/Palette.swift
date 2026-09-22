@@ -46,6 +46,9 @@ enum Palette {
         case "plum": return plum400
         case "sage": return Color(hex: 0x8FA894)
         case "cream": return ash300
+        case "lavender": return Color(hex: 0x8B7BB8)
+        case "sky": return Color(hex: 0x5E8DB3)
+        case "peach": return Color(hex: 0xD9895B)
         default: return rose300
         }
     }
